@@ -122,6 +122,7 @@ python3 -m locpilot devices                          # 已连接设备
 python3 -m locpilot set 31.2304 121.4737             # 单点传送
 python3 -m locpilot clear                            # 恢复真实定位
 python3 -m locpilot route --point 31.2304,121.4737 --point 31.2454,121.4987 --speed 6.9 --loop pingpong
+python3 -m locpilot route --point 31.2304,121.4737 --point 31.2454,121.4987 --mode walk  # 按交通方式规划
 python3 -m locpilot route --gpx track.gpx --speed 3  # GPX 回放
 python3 -m locpilot export-gpx --point 31.23,121.47 --point 31.24,121.48 --out route.gpx
 python3 -m locpilot search 上海外滩                  # 地址搜索
@@ -132,6 +133,11 @@ python3 -m locpilot serve --port 8799                # 只跑后端（App 会自
 常用参数：`--engine {auto,pymobiledevice3,go-ios,libimobiledevice,mock}`、`--udid`、`--json`、`--offline`；
 iOS 17+ 隧道相关：`--rsd HOST PORT`（显式指定 RSD 地址）、`--tunnel UDID`（使用 tunneld 已建好的隧道）、
 `--no-worker`（禁用常驻 worker，退回每次 spawn CLI）。这些也可写进 `settings.json` 或用 `POST /api/settings` 设置。
+
+路线模式：`--mode {walk,run,cycle,ebike,drive,highway}` 按交通方式规划（最多 7 个点 = 起点 + 终点 + 5 途经点）、
+`--provider {auto,amap,valhalla}`、`--jitter 0–1`（速度波动）、`--seed`（复现随机速度）。
+高德 Key 写入 `~/Library/Application Support/LocPilot/settings.json` 的 `amap_key`（0600，不进仓库），
+或设 `LOCPILOT_AMAP_KEY`；境外路线自动使用 Valhalla（免 Key）。
 
 ## 4. 引擎与系统要求
 

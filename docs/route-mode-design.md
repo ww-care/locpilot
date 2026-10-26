@@ -320,7 +320,7 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 |---|---|---|---|
 | P0（已完成） | Valhalla、坐标系、区域多边形、高德端点可达性 | 0.5 天 | ✅ |
 | P0（真 Key 验证） | 高德四种方式真实调用、`show_fields`、耗时字段、途经点限制、错误码、海外权限 | 0.5 天 | ✅ |
-| P1 | provider 抽象 + 高德 + Valhalla + 区域判定 + 逐段拼接 + 速度模型 + API + 前置修复 | 2–2.5 天 | 待开始 |
+| P1 | provider 抽象 + 高德 + Valhalla + 区域判定 + 逐段拼接 + 速度模型 + API + 前置修复 | 2–2.5 天 | ✅ 已完成 |
 | P2 | RouteSession + EngineClient + 路线 UI | 2–3 天 | 待开始 |
 | P3 | 真机/境外联调、速度观感、错误与重试 | 1–1.5 天 | 待开始 |
 
@@ -336,3 +336,44 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 
 - 国界多边形：Natural Earth 50m Admin 0 Countries（公共领域），RDP 简化后内嵌，仅用于**路线服务区域选择**，不渲染、不代表任何边界主张。
 - 高德/Valhalla/Google 的使用受各自服务条款约束；公共 demo 仅用于个人/验证用途。
+
+## 17. P1 实现记录（2026-10-26）
+
+**新增文件**
+
+- `locpilot/core/regions.py` + `china_mainland.json`：Natural Earth 50m + RDP(0.05) → 13 环 / 725 顶点 / 13.5 KB，15/15 判定正确；
+- `locpilot/core/speed.py`：`SpeedModel`（基准 + 慢随机游走 + 加速度限幅 + seed）；
+- `locpilot/core/routing/`：`base.py`（协议 / 错误 / 拼接 / polyline6）、`amap.py`（v5 + GCJ）、`valhalla.py`（polyline6）、`mock.py`、`service.py`（区域选择 + 逐段编排）。
+
+**修改**
+
+- `config.py`：`TRAVEL_MODES` / `MODE_PROFILES`（6 种方式）/ `ROUTING_SETTING_KEYS` / `speed_jitter` / `VALHALLA_URL` / 环境变量；
+- `route.py`：`mode` / `provider` / `warnings` / `duration` 字段（`to_dict` 增量输出）；
+- `playback.py`：接入 `SpeedModel`；`status()` 增加 `speed_base` / `mode` / `jitter`；**修复 LP-11**（finished 后 start 重置里程）；
+- `session.py`：`set_route(mode/provider/jitter/seed)`；无 `mode` 时保留旧 OSRM/直线行为；**修复 LP-12**（ticker 每轮读 `tick_interval`）；快照增加 `routing` 状态；
+- `api.py`：`/api/route` 支持 `mode/provider/jitter/seed`，限制 7 点；`RoutingError → 502 + retryable/code/provider`；`/api/settings` 接受路由配置；
+- `server.py`：错误体透传 `extra`（retryable/code/provider）；
+- `cli.py`：`route --mode/--provider/--jitter/--seed`，捕获 `RoutingError` 输出友好错误；
+- `README.md`：补路线模式参数与 Key 配置说明。
+
+**与设计一致的取舍**
+
+- 按整条路线选 provider（非逐段混合）；
+- 统一逐段串行（即使 Valhalla 支持 7 点原生多点，也走逐段，保证与高德一致、跨境可控）；
+- 不做自动降级/自动重试：错误统一返回 `retryable`，由用户点重试（按产品决策）。
+
+**验证**
+
+- 本地 43 项 unittest 全过（`python3 -m unittest discover -s tests`；`tests/` 按仓库策略不入库）；
+- 真实网络冒烟（上海同一起终点）：walk 5894 m / cycle 6466 m / ebike 6468 m / drive 4792 m；
+- 3 点逐段拼接：2 段、6575 m、0 warning、端点吸附 17.2 / 10.0 m；
+- 境外（巴黎）：Valhalla walk 1458 m / drive 2373 m；跨境 深圳→香港 40.2 km 走 Valhalla；
+- `Session + /api/route` 真实高德：200 / mode=walk / provider=amap / 5894 m；
+- MockEngine 回放：5 s 推进 6.37 m；跑完后重播 distance 归零并重新推进（LP-11）；
+- `macos/build.sh --selftest` 通过（打包后的后端包含新模块与数据文件）。
+
+**已知未做**
+
+- 自动重试/退避：按"让用户重试"的产品决策，只做错误分类，不做自动重试；
+- 高德 QPS/配额：以控制台为准，错误码已映射；
+- 路线保存 / GPX UI、转向提示：本期非目标。

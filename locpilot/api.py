@@ -16,6 +16,7 @@ from .core.gpx import GpxError
 from .core.places import PlaceError
 from .core.playback import PlaybackError
 from .core.route import RouteError
+from .core.routing import PROVIDER_CHOICES, RoutingError
 from .engine.base import EngineError, EngineUnavailable
 
 JSON = "application/json; charset=utf-8"
@@ -23,9 +24,23 @@ GPX = "application/gpx+xml; charset=utf-8"
 
 
 class ApiError(Exception):
-    def __init__(self, message: str, status: int = 400) -> None:
+    def __init__(self, message: str, status: int = 400, retryable: Optional[bool] = None,
+                 code: Optional[str] = None, provider: Optional[str] = None) -> None:
         super().__init__(message)
         self.status = status
+        self.retryable = retryable
+        self.code = code
+        self.provider = provider
+
+    def extra(self) -> dict:
+        data = {}
+        if self.retryable is not None:
+            data["retryable"] = self.retryable
+        if self.code is not None:
+            data["code"] = self.code
+        if self.provider is not None:
+            data["provider"] = self.provider
+        return data
 
 
 def _as_float(data: dict, key: str, required: bool = True, default: Optional[float] = None) -> Optional[float]:
@@ -114,6 +129,27 @@ def handle(session, method: str, path: str, query: Optional[dict] = None, body: 
         # --- 路线 -------------------------------------------------------
         if path in ("/api/route", "/api/route/"):
             points = _points_from(body)
+            mode = body.get("mode")
+            if mode is not None:
+                mode = str(mode).strip().lower()
+                if mode not in config.MODE_PROFILES:
+                    raise ApiError("未知交通方式: %s（可选：%s）" % (mode, ", ".join(config.TRAVEL_MODES)))
+                if len(points) > 7:
+                    raise ApiError("最多 7 个点（起点 + 终点 + 5 个途经点）")
+            provider = body.get("provider")
+            if provider is not None:
+                provider = str(provider).strip().lower()
+                if provider not in PROVIDER_CHOICES:
+                    raise ApiError("未知路线服务: %s" % provider)
+            jitter = _as_float(body, "jitter", required=False)
+            if jitter is not None and not (0.0 <= jitter <= 1.0):
+                raise ApiError("jitter 必须在 0–1 之间")
+            seed = body.get("seed")
+            if seed is not None:
+                try:
+                    seed = int(seed)
+                except (TypeError, ValueError):
+                    raise ApiError("seed 必须是整数")
             payload = session.set_route(
                 points,
                 profile=body.get("profile") or "driving",
@@ -121,6 +157,10 @@ def handle(session, method: str, path: str, query: Optional[dict] = None, body: 
                 loop=body.get("loop") or "none",
                 use_router=body.get("use_router"),
                 name=body.get("name"),
+                mode=mode,
+                provider=provider,
+                jitter=jitter,
+                seed=seed,
             )
             return 200, payload, JSON
 
@@ -184,7 +224,7 @@ def handle(session, method: str, path: str, query: Optional[dict] = None, body: 
         # --- 设置 -------------------------------------------------------
         if path in ("/api/settings", "/api/settings/"):
             if method == "POST":
-                session.settings.update({k: v for k, v in body.items() if k in session.settings or k in config.ENGINE_SETTING_KEYS or k.startswith("recent_")})
+                session.settings.update({k: v for k, v in body.items() if k in session.settings or k in config.ENGINE_SETTING_KEYS or k in config.ROUTING_SETTING_KEYS or k.startswith("recent_")})
                 session.places.offline = bool(session.settings.get("offline"))
                 session.router.offline = bool(session.settings.get("offline"))
                 session.store.set_setting("settings", {k: session.settings[k] for k in sorted(session.settings)})
@@ -198,6 +238,10 @@ def handle(session, method: str, path: str, query: Optional[dict] = None, body: 
 
     except ApiError:
         raise
+    except RoutingError as exc:
+        # 路线服务失败：502 + retryable，由 UI/CLI 决定重试（不做静默降级）
+        raise ApiError(str(exc), status=502, retryable=exc.retryable,
+                       code=exc.code, provider=exc.provider)
     except EngineUnavailable as exc:
         raise ApiError("引擎不可用: %s" % exc, 503)
     except EngineError as exc:

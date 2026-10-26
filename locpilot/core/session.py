@@ -25,6 +25,8 @@ from .gpx import route_from_gpx, to_gpx
 from .places import PlaceClient
 from .playback import LOOP_MODES, LOOP_NONE, STATE_PLAYING, Playback, PlaybackError
 from .route import OsrmRouter, Route, build_route
+from .routing import RoutingService
+from .speed import SpeedModel
 from .store import Store
 
 LOG_LIMIT = 200
@@ -38,6 +40,7 @@ class Session:
         engine: Optional[Engine] = None,
         clock: Optional[Callable[[], float]] = None,
         start_ticker: bool = True,
+        routing: Optional[RoutingService] = None,
     ) -> None:
         self.settings = dict(settings or config.resolve_settings())
         self.lock = threading.RLock()
@@ -46,6 +49,9 @@ class Session:
         self._snapshot_cache: Optional[dict] = None
         self.store = store if store is not None else Store()
         self.engine: Optional[Engine] = engine
+        # 路线服务：默认每次规划时按当前 settings 新建（Key 可能在运行期被设置）；
+        # 测试可注入固定实例。
+        self.routing: Optional[RoutingService] = routing
         self.route: Optional[Route] = None
         self.playback = Playback(clock=clock)
         self.current: Optional[dict] = None
@@ -275,13 +281,52 @@ class Session:
         loop: str = LOOP_NONE,
         use_router: Optional[bool] = None,
         name: Optional[str] = None,
+        mode: Optional[str] = None,
+        provider: Optional[str] = None,
+        jitter: Optional[float] = None,
+        seed: Optional[int] = None,
     ) -> dict:
         if not points:
             raise PlaybackError("路线至少需要一个点")
         if loop not in LOOP_MODES:
             raise PlaybackError("未知循环模式: %r" % (loop,))
+
+        if mode is not None:
+            if mode not in config.MODE_PROFILES:
+                raise PlaybackError("未知交通方式: %s" % (mode,))
+            if len(points) > 7:
+                raise PlaybackError("最多 7 个点（起点 + 终点 + 5 个途经点）")
+            service = self.routing or RoutingService(settings=self.settings)
+            plan = service.plan(points, mode=mode, provider=provider or "auto")
+            base_speed = float(speed if speed is not None else config.MODE_PROFILES[mode]["base"])
+            jitter_value = self.settings.get("speed_jitter", 0.12) if jitter is None else jitter
+            model = SpeedModel(mode=mode, base=base_speed, jitter=jitter_value, seed=seed)
+            route = Route(
+                waypoints=points,
+                geometry=plan.geometry,
+                routed=True,
+                profile=profile,
+                name=name,
+                road_distance=plan.distance,
+                mode=mode,
+                provider=plan.provider,
+                warnings=plan.warnings,
+                duration=plan.duration,
+            )
+            with self.lock:
+                self.playback.load(route, speed=base_speed, loop=loop, speed_model=model)
+                self.route = route
+                detail = "；".join(plan.warnings) if plan.warnings else ""
+                self.log("已规划路线（%s / %s）：%d 个点 / %s 米%s" % (
+                    mode, plan.provider, len(route.waypoints), int(route.distance),
+                    "；" + detail if detail else ""))
+                payload = self.route_summary()
+                self.emit("route", payload)
+                return payload
+
+        # 兼容旧行为：没有 mode 时沿用 OSRM/直线路径（CLI 与旧客户端）
         use_router = bool(self.settings.get("use_router", True)) if use_router is None else bool(use_router)
-        speed = float(speed if speed is not None else self.settings.get("default_speed", config.SPEED_PRESETS["walk"]))
+        base_speed = float(speed if speed is not None else self.settings.get("default_speed", config.SPEED_PRESETS["walk"]))
         route = build_route(
             points,
             profile=profile,
@@ -291,7 +336,7 @@ class Session:
             name=name,
         )
         with self.lock:
-            self.playback.load(route, speed=speed, loop=loop)
+            self.playback.load(route, speed=base_speed, loop=loop)
             self.route = route
             self.log("已装载路线：%d 个途经点 / %s 米%s" % (len(route.waypoints), int(route.distance), "（道路）" if route.routed else "（直线）"))
             payload = self.route_summary()
@@ -333,9 +378,10 @@ class Session:
                 if loop not in LOOP_MODES:
                     raise PlaybackError("未知循环模式: %r" % (loop,))
                 self.playback.loop = loop
-            self.playback.speed = new_speed
+            self.playback.set_base_speed(new_speed)
             status = self.playback.start()
-            self.log("开始回放：速度 %.2f m/s，循环 %s" % (self.playback.speed, self.playback.loop))
+            self.log("开始回放：基准速度 %.2f m/s（%s），循环 %s" % (
+                new_speed, status.get("mode") or "-", self.playback.loop))
             self.emit("playback", status)
             return status
 
@@ -402,8 +448,15 @@ class Session:
         self._ticker.start()
 
     def _run_ticker(self) -> None:
-        interval = float(self.settings.get("tick_interval", config.TICK_INTERVAL)) or config.TICK_INTERVAL
-        while not self._stop_event.wait(interval):
+        # 每轮重新读取 tick_interval：运行期通过 /api/settings 改节拍可以立即生效（修复 LP-12）
+        while not self._stop_event.is_set():
+            try:
+                interval = float(self.settings.get("tick_interval", config.TICK_INTERVAL))
+            except (TypeError, ValueError):
+                interval = config.TICK_INTERVAL
+            interval = max(0.05, interval)
+            if self._stop_event.wait(interval):
+                break
             try:
                 self.tick()
             except Exception as exc:  # ticker 绝不能因单次异常退出
@@ -475,10 +528,17 @@ class Session:
                     "tick_interval": self.settings.get("tick_interval", config.TICK_INTERVAL),
                     "default_speed": self.settings.get("default_speed"),
                     "speed_presets": dict(config.SPEED_PRESETS),
+                    "speed_jitter": self.settings.get("speed_jitter", 0.12),
+                    "modes": list(config.TRAVEL_MODES),
                     "min_speed": config.MIN_SPEED,
                     "max_speed": config.MAX_SPEED,
                     "use_router": self.settings.get("use_router", True),
                     "offline": bool(self.settings.get("offline")),
+                },
+                "routing": {
+                    "provider": self.settings.get("routing_provider", "auto"),
+                    "amap_key_configured": bool(str(self.settings.get("amap_key") or "").strip()),
+                    "providers": ["amap", "valhalla"],
                 },
                 "tile_url": self.settings.get("tile_url", config.TILE_URL),
                 "tile_attribution": config.TILE_ATTRIBUTION,

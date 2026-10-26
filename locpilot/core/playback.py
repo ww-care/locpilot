@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 from .. import config
 from .route import Route
+from .speed import SpeedModel
 
 STATE_IDLE = "idle"
 STATE_PLAYING = "playing"
@@ -35,6 +36,7 @@ class Playback:
         self._clock = clock or time.monotonic
         self.route: Optional[Route] = None
         self.speed = 0.0
+        self.speed_model: Optional[SpeedModel] = None
         self.loop = LOOP_NONE
         self.state = STATE_IDLE
         self.distance = 0.0
@@ -56,7 +58,8 @@ class Playback:
             raise PlaybackError("速度超出允许范围 %.1f–%.1f m/s" % (low, high))
         return value
 
-    def load(self, route: Route, speed: float, loop: str = LOOP_NONE) -> None:
+    def load(self, route: Route, speed: float, loop: str = LOOP_NONE,
+             speed_model: Optional[SpeedModel] = None) -> None:
         if route is None or not route.geometry:
             raise PlaybackError("路线为空，无法装载")
         speed = self.validate_speed(speed)
@@ -64,6 +67,7 @@ class Playback:
             raise PlaybackError("未知循环模式: %r" % (loop,))
         self.route = route
         self.speed = float(speed)
+        self.speed_model = speed_model
         self.loop = loop
         self.distance = 0.0
         self.direction = 1
@@ -71,10 +75,25 @@ class Playback:
         self._last_tick = None
         self._elapsed = 0.0
 
+    def set_base_speed(self, speed: float) -> float:
+        """手动覆盖基准速度（保留随机参数）。"""
+        value = self.validate_speed(speed)
+        self.speed = value
+        if self.speed_model is not None:
+            self.speed_model.rebase(value)
+        return value
+
     def start(self) -> dict:
         if self.route is None:
             raise PlaybackError("尚未装载路线")
         self.validate_speed(self.speed)
+        if self.state == STATE_FINISHED:
+            # 跑完再 start 应当从头重播（修复 LP-11）
+            self.distance = 0.0
+            self.direction = 1
+            self._elapsed = 0.0
+            if self.speed_model is not None:
+                self.speed_model.reset()
         self.state = STATE_PLAYING
         self._last_tick = self._clock()
         return self.status()
@@ -97,6 +116,8 @@ class Playback:
         self.direction = 1
         self._last_tick = None
         self._elapsed = 0.0
+        if self.speed_model is not None:
+            self.speed_model.reset()
         return self.status()
 
     # --- 推进 ----------------------------------------------------------
@@ -126,7 +147,8 @@ class Playback:
             return self._position(total)
         if dt == 0:
             return self._position(self.distance)
-        travel = self.speed * dt
+        speed = self.speed_model.speed_at(dt) if self.speed_model is not None else self.speed
+        travel = speed * dt
         if self.loop == LOOP_PINGPONG:
             phase = self.distance if self.direction > 0 else 2 * total - self.distance
             phase = (phase + travel) % (2 * total)
@@ -146,7 +168,7 @@ class Playback:
         pos = self.route.position_at(distance)
         if pos is None:
             return None
-        pos["speed"] = self.speed
+        pos["speed"] = self.speed_model.current if self.speed_model is not None else self.speed
         pos["direction"] = self.direction
         return pos
 
@@ -154,15 +176,28 @@ class Playback:
     def status(self) -> dict:
         total = self.route.distance if self.route else 0.0
         remaining = max(0.0, total - self.distance)
+        if self.speed_model is not None:
+            current = self.speed_model.current
+            base = self.speed_model.base
+            mode = self.speed_model.mode
+            jitter = self.speed_model.jitter
+        else:
+            current = self.speed
+            base = self.speed
+            mode = getattr(self.route, "mode", None) if self.route else None
+            jitter = 0.0
         return {
             "state": self.state,
             "loop": self.loop,
-            "speed": self.speed,
+            "speed": round(current, 4),
+            "speed_base": round(base, 4),
+            "mode": mode,
+            "jitter": round(jitter, 4),
             "distance": round(self.distance, 3),
             "total_distance": round(total, 3),
             "remaining_distance": round(remaining, 3),
             "progress": round(self.distance / total, 6) if total > 0 else 0.0,
-            "eta_seconds": round(remaining / self.speed, 1) if self.speed > 0 else None,
+            "eta_seconds": round(remaining / base, 1) if base > 0 else None,
             "direction": self.direction,
             "route_name": getattr(self.route, "name", None),
         }

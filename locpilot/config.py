@@ -59,6 +59,7 @@ TILE_PROVIDERS = {
 DEFAULT_TILE_PROVIDER = "amap"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org"
 OSRM_URL = "https://router.project-osrm.org"
+VALHALLA_URL = "https://valhalla1.openstreetmap.de"
 HTTP_TIMEOUT = 8.0
 HTTP_USER_AGENT = "LocPilot/1.0 (iOS virtual location tool; local desktop use)"
 
@@ -66,13 +67,18 @@ HTTP_USER_AGENT = "LocPilot/1.0 (iOS virtual location tool; local desktop use)"
 # 引擎下发间隔（秒）。USB/隧道链路不宜过密，1s 与 iAnyGo 的体感一致。
 TICK_INTERVAL = 1.0
 # 位移速度（米/秒）
-SPEED_PRESETS = {
-    "walk": 1.4,
-    "run": 3.0,
-    "cycle": 6.9,
-    "drive": 13.9,
-    "sport": 30.0,
+# 交通方式与速度模型参数：base 基准速度、jitter 随机波动比例、sigma 随机游走强度、
+# accel 加速度上限（m/s²）、interval 目标速度更新间隔（秒）。设计见 docs/route-mode-design.md。
+TRAVEL_MODES = ("walk", "run", "cycle", "ebike", "drive", "highway")
+MODE_PROFILES: Dict[str, Dict[str, Any]] = {
+    "walk": {"base": 1.3, "jitter": 0.15, "sigma": 0.08, "accel": 0.6, "interval": (3.0, 8.0)},
+    "run": {"base": 3.0, "jitter": 0.10, "sigma": 0.06, "accel": 0.8, "interval": (3.0, 8.0)},
+    "cycle": {"base": 4.8, "jitter": 0.12, "sigma": 0.07, "accel": 0.8, "interval": (3.0, 8.0)},
+    "ebike": {"base": 6.2, "jitter": 0.12, "sigma": 0.07, "accel": 1.0, "interval": (3.0, 8.0)},
+    "drive": {"base": 12.0, "jitter": 0.20, "sigma": 0.10, "accel": 2.0, "interval": (3.0, 8.0)},
+    "highway": {"base": 28.0, "jitter": 0.08, "sigma": 0.05, "accel": 2.5, "interval": (5.0, 12.0)},
 }
+SPEED_PRESETS = {mode: float(profile["base"]) for mode, profile in MODE_PROFILES.items()}
 MIN_SPEED = 0.1
 MAX_SPEED = 200.0
 # 直线模式下每段折线的加密步长（米），保证拐弯处平滑
@@ -88,6 +94,7 @@ DEFAULTS: Dict[str, Any] = {
     "offline": False,
     "use_router": True,
     "history_limit": HISTORY_LIMIT,
+    "speed_jitter": 0.12,
 }
 
 # 引擎/隧道调试项：不放进 DEFAULTS（避免污染面向用户的设置快照），但必须允许通过
@@ -105,6 +112,13 @@ ENGINE_SETTING_KEYS = (
     "goios_bin",
 )
 
+# 路线服务配置：Key 只允许从环境变量 / settings.json 读入，绝不写进仓库或安装包。
+ROUTING_SETTING_KEYS = (
+    "amap_key",
+    "routing_provider",
+    "valhalla_url",
+)
+
 _ENV_KEYS = {
     "LOCPILOT_HOME": "home",
     "LOCPILOT_HOST": "host",
@@ -115,6 +129,9 @@ _ENV_KEYS = {
     "LOCPILOT_OFFLINE": "offline",
     "LOCPILOT_TICK_INTERVAL": "tick_interval",
     "LOCPILOT_TILE_URL": "tile_url",
+    "LOCPILOT_AMAP_KEY": "amap_key",
+    "LOCPILOT_ROUTING_PROVIDER": "routing_provider",
+    "LOCPILOT_VALHALLA_URL": "valhalla_url",
 }
 
 
@@ -170,7 +187,11 @@ def load_settings() -> Dict[str, Any]:
         except (OSError, ValueError):
             data = {}
     merged = dict(DEFAULTS)
-    merged.update({k: v for k, v in data.items() if k in DEFAULTS or k in ENGINE_SETTING_KEYS or k.startswith("recent_")})
+    merged.update({
+        k: v
+        for k, v in data.items()
+        if k in DEFAULTS or k in ENGINE_SETTING_KEYS or k in ROUTING_SETTING_KEYS or k.startswith("recent_")
+    })
     return merged
 
 

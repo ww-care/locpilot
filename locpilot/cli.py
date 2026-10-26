@@ -15,6 +15,7 @@ from typing import List, Optional
 
 from . import config
 from .core import geo
+from .core.routing import RoutingError
 from .core.session import Session
 from .core.store import Store
 from .engine import detect
@@ -160,11 +161,19 @@ def cmd_route(args) -> int:
         if len(points) < 2:
             print("至少需要两个 --point", file=sys.stderr)
             return 2
-        summary = session.set_route(points, speed=args.speed, loop=args.loop, use_router=not args.no_router)
+        summary = session.set_route(
+            points, speed=args.speed, loop=args.loop, use_router=not args.no_router,
+            mode=args.mode, provider=args.provider, jitter=args.jitter, seed=args.seed,
+        )
     if args.json:
         _print(summary, True)
     else:
-        print("路线: %s 米 / %s 个途经点 / %s" % (int(summary.get("distance", 0)), summary.get("waypoint_count"), "道路" if summary.get("routed") else "直线"))
+        mode = summary.get("mode")
+        provider = summary.get("provider")
+        print("路线: %s 米 / %s 个点 / %s%s" % (
+            int(summary.get("distance", 0)), summary.get("waypoint_count"),
+            "道路" if summary.get("routed") else "直线",
+            (" / %s / %s" % (mode, provider)) if mode else ""))
     if args.dry_run:
         session.shutdown()
         return 0
@@ -290,6 +299,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_route.add_argument("--speed", type=float, default=None, help="米/秒")
     p_route.add_argument("--loop", default="none", choices=["none", "loop", "pingpong"])
     p_route.add_argument("--no-router", action="store_true", help="不联网路由，直接直线连接")
+    p_route.add_argument("--mode", default=None, choices=list(config.TRAVEL_MODES), help="交通方式（使用路线服务）")
+    p_route.add_argument("--provider", default=None, choices=["auto", "amap", "valhalla"], help="路线服务（默认按区域自动选择）")
+    p_route.add_argument("--jitter", type=float, default=None, help="速度波动比例 0–1（默认按交通方式）")
+    p_route.add_argument("--seed", type=int, default=None, help="随机速度种子（调试可复现）")
     p_route.add_argument("--dry-run", action="store_true", help="只装载路线不开始回放")
     add_common(p_route)
     p_route.set_defaults(func=cmd_route)
@@ -323,7 +336,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return 0
-    return int(args.func(args) or 0)
+    try:
+        return int(args.func(args) or 0)
+    except RoutingError as exc:
+        print("路线规划失败: %s" % exc, file=sys.stderr)
+        if getattr(exc, "code", None):
+            print("错误码: %s" % exc.code, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

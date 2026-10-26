@@ -70,8 +70,11 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _json_error(self, status: int, message: str) -> None:
-        self._send(status, {"ok": False, "error": message})
+    def _json_error(self, status: int, message: str, extra: Optional[dict] = None) -> None:
+        payload = {"ok": False, "error": message}
+        if extra:
+            payload.update(extra)
+        self._send(status, payload)
 
     def _authorized(self) -> bool:
         token = getattr(self.server, "token", None)
@@ -132,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 status, payload, content_type = api_module.handle(self.session, "GET", path, query=query)
             except api_module.ApiError as exc:
-                return self._json_error(exc.status, str(exc))
+                return self._json_error(exc.status, str(exc), exc.extra())
             except Exception as exc:  # 未预期异常也要返回结构化错误
                 return self._json_error(500, "内部错误: %s" % (exc,))
             return self._send(status, payload, content_type)

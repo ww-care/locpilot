@@ -34,6 +34,10 @@ class Route:
         profile: str = "driving",
         name: Optional[str] = None,
         road_distance: Optional[float] = None,
+        mode: Optional[str] = None,
+        provider: Optional[str] = None,
+        warnings: Optional[Sequence[str]] = None,
+        duration: Optional[float] = None,
     ) -> None:
         if not waypoints:
             raise RouteError("路线至少需要一个点")
@@ -45,6 +49,10 @@ class Route:
         self.profile = profile
         self.name = name
         self.road_distance = float(road_distance) if road_distance is not None else None
+        self.mode = mode
+        self.provider = provider
+        self.warnings = list(warnings or [])
+        self.duration = float(duration) if duration is not None else None
         self._cum = geo.cumulative_distances(self.geometry)
         self.distance = self._cum[-1] if self._cum else 0.0
 
@@ -70,6 +78,10 @@ class Route:
             "distance": round(self.distance, 3),
             "road_distance": round(self.road_distance, 3) if self.road_distance is not None else None,
             "bounds": self.bounds(),
+            "mode": self.mode,
+            "provider": self.provider,
+            "duration": round(self.duration, 1) if self.duration is not None else None,
+            "warnings": list(self.warnings),
         }
 
     @classmethod
@@ -81,6 +93,10 @@ class Route:
             profile=data.get("profile") or "driving",
             name=data.get("name"),
             road_distance=data.get("road_distance"),
+            mode=data.get("mode"),
+            provider=data.get("provider"),
+            warnings=data.get("warnings"),
+            duration=data.get("duration"),
         )
 
 

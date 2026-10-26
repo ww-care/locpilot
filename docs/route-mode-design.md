@@ -403,9 +403,14 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
   - 新增 `testMainActorAsync`：主线程跑 RunLoop 等待，避免 `testAsync` 的信号量阻塞 MainActor 造成死等；
 - `swift build`（debug）与 `macos/build.sh`（release + ad-hoc 签名）均通过；
 - 后端 43 项 unittest 通过；确认快照 `route` 不含 `geometry`、`/api/route` 响应仍含几何；
-- 视觉验证受限：当前环境无屏幕录制权限（`screencapture` 报 "could not create image from display"），界面细节需在桌面手动确认。
+- 视觉验证受限：当前环境无屏幕录制权限（`screencapture` 报 "could not create image from display"），界面细节需在桌面手动确认；
+- 已安装到 `/Applications/LocPilot.app` 并用真机验证：iPhone（iOS 27.2）自动连接 `worker:dvt`，包内后端为新代码
+  （`runtime.package` 指向 App 内 `backend/locpilot`）；通过 `/api/route` 用真实高德规划成功（walk 5894 m / 383 点）；
+- **构建脚本修复**：本机 Desktop 由 iCloud/FileProvider 管理，会反复给 `.app` 打上 `FinderInfo`，
+  原地 `codesign` 必然失败。`build.sh` / `dist.sh` 改为在 `/tmp` 暂存副本里清理并签名、再以
+  `ditto --noextattr` 放回，校验以暂存副本为准。
 
 **P2 未做（按范围）**
 
 - 转向提示 / 语音、路线保存 / GPX UI、播放中编辑；
-- 真实设备联调（P3）。
+- 真实设备联调中的「沿路线移动/速度观感/拖动交互」需要人工在界面上确认（P3）。

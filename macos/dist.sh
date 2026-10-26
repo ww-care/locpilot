@@ -41,12 +41,24 @@ if /usr/libexec/PlistBuddy -c 'Print :LPRepositoryPath' "$APP/Contents/Info.plis
 fi
 echo "    ✓ 已移除 LPRepositoryPath（不再依赖本机仓库路径）"
 
-# 2) 清掉可能带上的扩展属性（下载后不影响 Gatekeeper 判断，但发行包应干净）
-xattr -cr "$APP" 2>/dev/null || true
-
-# 3) 改过 Info.plist 必须重新签名
-codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1
-codesign --verify --deep --strict "$APP" >/dev/null 2>&1 && echo "    ✓ ad-hoc 签名校验通过" || { echo "    ✗ 签名校验失败" >&2; exit 1; }
+# 2) 在 /tmp 暂存副本里清理并重新签名
+#    本机 Desktop 由 iCloud/FileProvider 管理，会反复给 .app 打上 FinderInfo/FileProvider 属性，
+#    原地签名必然报 detritus；在 /tmp 里签好，再以 --noextattr 放回。
+SIGN_STAGE="$(mktemp -d)/LocPilot.app"
+ditto --norsrc --noextattr "$APP" "$SIGN_STAGE"
+xattr -cr "$SIGN_STAGE" 2>/dev/null || true
+xattr -d com.apple.FinderInfo "$SIGN_STAGE" 2>/dev/null || true
+codesign --force --sign - --timestamp=none "$SIGN_STAGE" >/dev/null 2>&1 || true
+if codesign --verify --deep --strict "$SIGN_STAGE" >/dev/null 2>&1; then
+  echo "    ✓ ad-hoc 签名校验通过"
+else
+  echo "    ✗ 签名校验失败" >&2
+  rm -rf "$(dirname "$SIGN_STAGE")"
+  exit 1
+fi
+rm -rf "$APP"
+ditto --norsrc --noextattr "$SIGN_STAGE" "$APP"
+rm -rf "$(dirname "$SIGN_STAGE")"
 
 echo "==> 分发前自检"
 ARCH="$(lipo -info "$APP/Contents/MacOS/LocPilot" | awk '{print $NF}')"

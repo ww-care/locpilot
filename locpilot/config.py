@@ -90,6 +90,21 @@ DEFAULTS: Dict[str, Any] = {
     "history_limit": HISTORY_LIMIT,
 }
 
+# 引擎/隧道调试项：不放进 DEFAULTS（避免污染面向用户的设置快照），但必须允许通过
+# settings.json / CLI 参数（--rsd/--tunnel/--no-worker）/ POST /api/settings 传入。
+# 否则 pmd3_worker 的隧道降级分支与 worker 的 CLI 兜底模式永远走不到（issue LP-06）。
+ENGINE_SETTING_KEYS = (
+    "worker",
+    "auto_mount",
+    "open_timeout",
+    "rsd",
+    "tunnel",
+    "pmd3_bin",
+    "pmd3_python",
+    "pmd3_home",
+    "goios_bin",
+)
+
 _ENV_KEYS = {
     "LOCPILOT_HOME": "home",
     "LOCPILOT_HOST": "host",
@@ -155,7 +170,7 @@ def load_settings() -> Dict[str, Any]:
         except (OSError, ValueError):
             data = {}
     merged = dict(DEFAULTS)
-    merged.update({k: v for k, v in data.items() if k in DEFAULTS or k.startswith("recent_")})
+    merged.update({k: v for k, v in data.items() if k in DEFAULTS or k in ENGINE_SETTING_KEYS or k.startswith("recent_")})
     return merged
 
 

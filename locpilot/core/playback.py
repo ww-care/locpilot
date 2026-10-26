@@ -12,6 +12,7 @@ import math
 import time
 from typing import Callable, Optional
 
+from .. import config
 from .route import Route
 
 STATE_IDLE = "idle"
@@ -50,6 +51,9 @@ class Playback:
             raise PlaybackError("速度必须是有限的正数")
         if not math.isfinite(value) or value <= 0:
             raise PlaybackError("速度必须是有限的正数")
+        low, high = config.MIN_SPEED, config.MAX_SPEED
+        if not low <= value <= high:
+            raise PlaybackError("速度超出允许范围 %.1f–%.1f m/s" % (low, high))
         return value
 
     def load(self, route: Route, speed: float, loop: str = LOOP_NONE) -> None:

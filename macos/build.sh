@@ -159,12 +159,22 @@ find "$APP/Contents/Resources/backend" -name '__pycache__' -type d -prune -exec 
 find "$APP/Contents/Resources/backend" -name '*.pyc' -delete 2>/dev/null || true
 
 # ---- ad-hoc 签名 ----
-if codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1; then
+# 产物若带 com.apple.provenance 等扩展属性（Desktop / iCloud 目录下很常见），codesign 会直接报
+# "resource fork, Finder information, or similar detritus not allowed"。必须先清干净再签，
+# 否则签名静默失败，留下一个 codesign --verify 通不过的包（用户只会看到莫名的 Gatekeeper 拦截）。
+xattr -cr "$APP" 2>/dev/null || true
+SIGN_ERR="$CACHE/codesign.err"
+if codesign --force --sign - --timestamp=none "$APP" 2>"$SIGN_ERR"; then
   echo "==> ad-hoc 签名完成"
 else
-  echo "    ⚠ 签名失败：仍可本地运行（首次打开可能需要右键 → 打开）"
+  echo "    ⚠ ad-hoc 签名失败：仍可本地运行，但分发前必须修好（错误详情见下）" >&2
+  { tail -3 "$SIGN_ERR" 2>/dev/null | sed 's/^/      /'; } >&2 || true
 fi
-codesign --verify "$APP" 2>&1 | tail -1 || true
+if codesign --verify "$APP" >/dev/null 2>&1; then
+  echo "    ✓ 签名校验通过"
+else
+  { codesign --verify "$APP" 2>&1 | tail -1 | sed 's/^/    ✗ 签名校验失败：/'; } >&2 || true
+fi
 
 # ---- 包结构自检（验收项 3）----
 echo "==> 包结构自检"

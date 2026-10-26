@@ -137,13 +137,13 @@ public actor EngineClient {
             let task = Task {
                 var attempt = 0
                 while !Task.isCancelled {
+                    var receivedEvent = false
                     do {
                         let request = try await self.request("api/events")
                         let (bytes, response) = try await session.bytes(for: request)
                         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                             throw EngineError.transport("事件流返回 \(String(describing: response))")
                         }
-                        attempt = 0
                         // 关键：Foundation 的 bytes.lines **不会产出空行**，而 SSE 正是用空行分帧，
                         // 靠它做判定会让事件流永远没有输出。这里按字节自己切行，保留空行。
                         // 同时按行累积字节再整体 UTF-8 解码，避免多字节中文被逐字节拆坏。
@@ -160,6 +160,7 @@ public actor EngineClient {
                                         if let data = payload.data(using: .utf8),
                                            let snapshot = try? JSONDecoder().decode(StatusSnapshot.self, from: data) {
                                             continuation.yield(snapshot)
+                                            receivedEvent = true
                                         }
                                         payload = ""
                                     }
@@ -170,11 +171,16 @@ public actor EngineClient {
                                 lineBytes.append(byte)
                             }
                         }
+                        // 读循环正常结束（后端关闭了事件流）同样算断流：统一走下面的退避，
+                        // 否则后端重启/空闲断流时就会变成零延迟热循环，白白烧 CPU。
                     } catch {
-                        attempt += 1
-                        let delay = min(Double(attempt) * 0.5, 3.0)
-                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        // 建连失败或流内异常：统一走下面的退避
                     }
+                    if Task.isCancelled { break }
+                    // 收到过事件 → 从短退避重新开始；一次都没收到 → 递增退避（上限 3s）
+                    attempt = receivedEvent ? 1 : attempt + 1
+                    let delay = min(Double(attempt) * 0.5, 3.0)
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
                 continuation.finish()
             }

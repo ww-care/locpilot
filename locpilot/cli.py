@@ -29,8 +29,26 @@ def _print(data, as_json: bool) -> None:
         print(data if isinstance(data, str) else json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def _settings_overrides(args) -> dict:
+    """把子命令上的显式覆盖项整理成 settings；没给出的键不放进去，避免覆盖配置文件。"""
+    overrides = {
+        "engine": getattr(args, "engine", None),
+        "offline": getattr(args, "offline", None),
+        "tunnel": getattr(args, "tunnel", None),
+        "worker": getattr(args, "worker", None),
+    }
+    rsd = getattr(args, "rsd", None)
+    if rsd:
+        host, port = rsd
+        try:
+            overrides["rsd"] = [host, int(port)]
+        except (TypeError, ValueError):
+            raise SystemExit("--rsd 的 PORT 必须是数字: %r" % (port,))
+    return {k: v for k, v in overrides.items() if v is not None}
+
+
 def _make_session(args) -> Session:
-    settings = config.resolve_settings({"engine": getattr(args, "engine", None), "offline": getattr(args, "offline", None)})
+    settings = config.resolve_settings(_settings_overrides(args))
     store = Store(path=config.ensure_data_dir() / "state.json", history_limit=int(settings.get("history_limit", 100)))
     return Session(settings=settings, store=store, start_ticker=False)
 
@@ -64,7 +82,9 @@ def _start_parent_watch(session: Session) -> None:
 
 
 def cmd_serve(args) -> int:
-    settings = config.resolve_settings({"engine": args.engine, "tick_interval": args.tick})
+    overrides = _settings_overrides(args)
+    overrides["tick_interval"] = args.tick
+    settings = config.resolve_settings(overrides)
     store = Store(path=config.ensure_data_dir() / "state.json", history_limit=int(settings.get("history_limit", 100)))
     session = Session(settings=settings, store=store, start_ticker=True)
     if getattr(args, "watch_parent", False):
@@ -213,6 +233,14 @@ def cmd_version(args) -> int:
     return 0
 
 
+def _add_engine_options(p) -> None:
+    """引擎/隧道相关参数，serve 与所有需要连设备的子命令共用。"""
+    p.add_argument("--engine", default=None, help="引擎: pymobiledevice3 | go-ios | libimobiledevice | mock | auto")
+    p.add_argument("--rsd", nargs=2, metavar=("HOST", "PORT"), help="显式指定 iOS 17+ 的 RSD 隧道地址（HOST PORT）")
+    p.add_argument("--tunnel", default=None, help="指定 tunneld 中已建立隧道的设备 UDID")
+    p.add_argument("--no-worker", dest="worker", action="store_false", default=None, help="禁用常驻 worker，退回每次 spawn CLI")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="locpilot", description="LocPilot — 类 iAnyGo 的 iOS 虚拟定位工具")
     parser.add_argument("--version", action="version", version="LocPilot %s" % config.VERSION)
@@ -220,7 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_common(p, engine=True):
         if engine:
-            p.add_argument("--engine", default=None, help="引擎: pymobiledevice3 | go-ios | libimobiledevice | mock | auto")
+            _add_engine_options(p)
         p.add_argument("--udid", default=None, help="指定设备 UDID")
         p.add_argument("--offline", action="store_true", help="离线模式：不访问地图与地理编码服务")
         p.add_argument("--json", action="store_true", help="以 JSON 输出")
@@ -228,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser("serve", help="启动本地 Web 服务")
     p_serve.add_argument("--host", default=config.DEFAULT_HOST)
     p_serve.add_argument("--port", type=int, default=config.DEFAULT_PORT, help="0 表示自动选择空闲端口")
-    p_serve.add_argument("--engine", default=None)
+    _add_engine_options(p_serve)
     p_serve.add_argument("--tick", type=float, default=None, help="回放节拍（秒）")
     p_serve.add_argument("--token", default=None, help="可选访问令牌")
     p_serve.add_argument("--open", action="store_true", help="启动后打开浏览器")

@@ -24,6 +24,17 @@ from . import config
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY = 8 * 1024 * 1024
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
+
+
+def _authority_hostname(authority: str) -> str:
+    """从 Host 头的 authority 里取主机名（去掉端口；兼容 [::1]:8799）。"""
+    value = (authority or "").strip().lower()
+    if not value:
+        return ""
+    if value.startswith("["):
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if ":" in value else value
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -72,6 +83,40 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         return (query.get("token") or [""])[0] == token
 
+    def _origin_allowed(self) -> bool:
+        """挡住跨站请求与 DNS rebinding。
+
+        * 浏览器发起的跨站请求一定带 Origin —— 只接受本机同源；命令行 / 原生 App 不带
+          Origin，正常放行。
+        * 仅监听回环时额外校验 Host —— 防止恶意域名解析到 127.0.0.1 后以"同源"身份调用。
+          显式 `--host 0.0.0.0` 的用户已接受局域网暴露，不能因为 Host 是局域网 IP 就全拒。
+        """
+        if self._bound_loopback_only():
+            host_header = self.headers.get("Host")
+            if host_header and _authority_hostname(host_header) not in LOCAL_HOSTNAMES:
+                return False
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        if not origin or origin.strip().lower() == "null":
+            return False
+        parsed = urlparse(origin)
+        if parsed.scheme not in ("http", "https") or parsed.hostname not in LOCAL_HOSTNAMES:
+            return False
+        try:
+            server_port = int(self.server.server_address[1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        origin_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return origin_port == server_port
+
+    def _bound_loopback_only(self) -> bool:
+        try:
+            bound = str(self.server.server_address[0])
+        except (AttributeError, IndexError, TypeError):
+            return True
+        return bound in LOCAL_HOSTNAMES
+
     # --- 路由 ----------------------------------------------------------
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -79,6 +124,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             if not self._authorized():
                 return self._json_error(401, "token 无效")
+            if not self._origin_allowed():
+                return self._json_error(403, "拒绝跨站请求")
             if path in ("/api/events", "/api/events/"):
                 return self._serve_events()
             query = parse_qs(parsed.query)
@@ -98,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json_error(404, "未知路径")
         if not self._authorized():
             return self._json_error(401, "token 无效")
+        if not self._origin_allowed():
+            return self._json_error(403, "拒绝跨站请求")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -124,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json_error(404, "未知路径")
         if not self._authorized():
             return self._json_error(401, "token 无效")
+        if not self._origin_allowed():
+            return self._json_error(403, "拒绝跨站请求")
         try:
             status, payload, content_type = api_module.handle(self.session, "DELETE", path, query=parse_qs(parsed.query))
         except api_module.ApiError as exc:

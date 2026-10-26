@@ -129,7 +129,9 @@ python3 -m locpilot doctor                           # 环境自检（JSON）
 python3 -m locpilot serve --port 8799                # 只跑后端（App 会自动拉起它）
 ```
 
-常用参数：`--engine {auto,pymobiledevice3,go-ios,libimobiledevice,mock}`、`--udid`、`--json`、`--offline`。
+常用参数：`--engine {auto,pymobiledevice3,go-ios,libimobiledevice,mock}`、`--udid`、`--json`、`--offline`；
+iOS 17+ 隧道相关：`--rsd HOST PORT`（显式指定 RSD 地址）、`--tunnel UDID`（使用 tunneld 已建好的隧道）、
+`--no-worker`（禁用常驻 worker，退回每次 spawn CLI）。这些也可写进 `settings.json` 或用 `POST /api/settings` 设置。
 
 ## 4. 引擎与系统要求
 

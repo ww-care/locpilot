@@ -184,7 +184,7 @@ def handle(session, method: str, path: str, query: Optional[dict] = None, body: 
         # --- 设置 -------------------------------------------------------
         if path in ("/api/settings", "/api/settings/"):
             if method == "POST":
-                session.settings.update({k: v for k, v in body.items() if k in session.settings or k.startswith("recent_")})
+                session.settings.update({k: v for k, v in body.items() if k in session.settings or k in config.ENGINE_SETTING_KEYS or k.startswith("recent_")})
                 session.places.offline = bool(session.settings.get("offline"))
                 session.router.offline = bool(session.settings.get("offline"))
                 session.store.set_setting("settings", {k: session.settings[k] for k in sorted(session.settings)})

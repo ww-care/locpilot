@@ -110,14 +110,21 @@ class Playback:
             self._last_tick = self._clock()
         return self.status()
 
-    def stop(self) -> dict:
+    def stop(self, keep_distance: bool = False) -> dict:
+        """停止回放。
+
+        keep_distance=True 时保留当前位置/进度：设备停在最后走到的地方，
+        再次 start 会从当前位置继续（路线模式「停止」用这个语义）。
+        默认 False 用于断开/重新装载等需要归零的场景。
+        """
         self.state = STATE_IDLE
-        self.distance = 0.0
-        self.direction = 1
+        if not keep_distance:
+            self.distance = 0.0
+            self.direction = 1
+            self._elapsed = 0.0
+            if self.speed_model is not None:
+                self.speed_model.reset()
         self._last_tick = None
-        self._elapsed = 0.0
-        if self.speed_model is not None:
-            self.speed_model.reset()
         return self.status()
 
     # --- 推进 ----------------------------------------------------------

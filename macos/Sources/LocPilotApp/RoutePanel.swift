@@ -104,7 +104,7 @@ struct RoutePanel: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
             }
-        case .planned, .playing, .paused, .finished:
+        case .planned, .playing, .paused, .stopped, .finished:
             if let plan = route.plan {
                 HStack(spacing: 16) {
                     metric(route.distanceText, "距离")
@@ -113,6 +113,9 @@ struct RoutePanel: View {
                         metric(String(format: "%.1f km/h", route.currentSpeed * 3.6), "当前速度")
                     }
                     Spacer(minLength: 0)
+                }
+                if route.phase == .stopped {
+                    hint("已停止：设备停在当前位置，点「继续」接着走")
                 }
                 if !plan.warnings.isEmpty {
                     Text(plan.warnings.joined(separator: "；"))
@@ -178,6 +181,9 @@ struct RoutePanel: View {
             case .paused:
                 Button { state.routeResume() } label: { Label("继续", systemImage: "play.fill") }
                 Button { state.routeStop() } label: { Label("停止", systemImage: "stop.fill") }
+            case .stopped:
+                Button { state.routeStart() } label: { Label("继续", systemImage: "play.fill") }
+                Button { state.routeClear() } label: { Label("清空", systemImage: "trash") }
             case .finished:
                 Button { state.routeStart() } label: { Label("重播", systemImage: "arrow.counterclockwise") }
                 Button { state.routeStop() } label: { Label("停止", systemImage: "stop.fill") }

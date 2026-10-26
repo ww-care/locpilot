@@ -404,8 +404,10 @@ class Session:
 
     def stop_route(self) -> dict:
         with self.lock:
-            status = self.playback.stop()
-            self.log("回放停止")
+            # 停止但保留当前位置：设备停在走到的地方，进度不清零；
+            # 再次 start 从当前位置继续（避免"界面归零、设备在 2km 外"的错觉）。
+            status = self.playback.stop(keep_distance=True)
+            self.log("回放停止（设备停在当前位置）")
             self.emit("playback", status)
             return status
 

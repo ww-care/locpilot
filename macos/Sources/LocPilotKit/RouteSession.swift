@@ -77,6 +77,7 @@ public final class RouteSession: ObservableObject {
         case failed(String) // 规划失败，可重试
         case playing
         case paused
+        case stopped        // 中途停止：设备停在当前位置，进度保留
         case finished
     }
 
@@ -281,11 +282,18 @@ public final class RouteSession: ObservableObject {
 
     public func stopPlayback() async {
         do {
-            _ = try await client.stopRoute()
-            progress = 0
+            // 后端保留当前位置与进度：设备停在走到的地方，再次开始从当前位置继续。
+            let state = try await client.stopRoute()
+            apply(playback: state)
             currentSpeed = 0
-            etaSeconds = plan?.duration
-            phase = plan == nil ? .editing : .planned
+            etaSeconds = state.etaSeconds ?? plan?.duration
+            if plan == nil {
+                phase = .editing
+            } else if progress > 0.001 {
+                phase = .stopped
+            } else {
+                phase = .planned
+            }
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -315,7 +323,9 @@ public final class RouteSession: ObservableObject {
             // 规划中/失败时不要被 idle 快照冲掉状态
             if case .planning = phase { return }
             if case .failed = phase { return }
-            phase = .planned
+            currentSpeed = 0
+            // 中途停止：后端保留进度，显示为「已停止」而不是回到 0%
+            phase = progress > 0.001 ? .stopped : .planned
         }
     }
 }

@@ -26,6 +26,12 @@ struct MapScreen: View {
                         .stroke(Color.accentColor.opacity(0.9),
                                 style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                     }
+                    // 设备当前位置：路线模式下必须有这个点，否则"手机在哪"只能靠猜。
+                    if let position = state.position {
+                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: position.lat, longitude: position.lon), anchor: .center) {
+                            CurrentPositionDot()
+                        }
+                    }
                     ForEach(route.points) { point in
                         let index = route.points.firstIndex(where: { $0.id == point.id }) ?? 0
                         Annotation("", coordinate: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon), anchor: .center) {
@@ -99,6 +105,18 @@ struct MapScreen: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+/// 路线模式下的设备当前位置：绿点 + 白边，和途经点标记区分开。
+private struct CurrentPositionDot: View {
+    var body: some View {
+        Circle()
+            .fill(Color.green)
+            .frame(width: 14, height: 14)
+            .overlay(Circle().strokeBorder(Color.white, lineWidth: 2))
+            .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            .allowsHitTesting(false)
     }
 }
 

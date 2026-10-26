@@ -70,9 +70,10 @@ actor FakeRouteClient: RouteServicing {
 
     func stopRoute() async throws -> StatusSnapshot.PlaybackState {
         stopCalls += 1
+        // 与后端语义一致：停止保留当前位置与进度
         return StatusSnapshot.PlaybackState(state: "idle", mode: lastMode, speed: 0,
-                                            speedBase: 1.3, progress: 0, distance: 0,
-                                            totalDistance: 1000, etaSeconds: 100)
+                                            speedBase: 1.3, progress: 0.2, distance: 200,
+                                            totalDistance: 1000, etaSeconds: 80)
     }
 }
 
@@ -162,10 +163,17 @@ func registerRouteSessionTests() {
         expectEqual(session.phase, .playing, "resume 后")
 
         await session.stopPlayback()
-        expectEqual(session.phase, .planned, "stop 后回到 planned")
-        expectEqual(session.progress, 0, "stop 后进度归零")
+        expectEqual(session.phase, .stopped, "stop 后应为 stopped（设备停在当前位置）")
+        expectClose(session.progress, 0.2, tolerance: 1e-9, "stop 后进度保留")
+        expectEqual(session.currentSpeed, 0, "停止后当前速度归零")
         let starts = await client.startCount()
         expectEqual(starts, 1, "start 调用次数")
+
+        // 停止后「继续」= 再次 start，从当前位置续播
+        await session.startPlayback()
+        expectEqual(session.phase, .playing, "继续后")
+        let startsAfter = await client.startCount()
+        expectEqual(startsAfter, 2, "继续应再次调用 start")
     }
 
     testMainActorAsync("RouteSession：SSE 快照驱动进度") {

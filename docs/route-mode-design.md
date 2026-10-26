@@ -41,14 +41,30 @@
 
 ## 3. P0 事实验证结果
 
-### 3.1 高德（国内）
+### 3.1 高德（国内，真 Key 已验证）
 
-- ✅ 五个端点均可达（用无效 Key 验证，未消耗配额）：`/v5/direction/{driving,walking,bicycling,electrobike}` 全部返回 `INVALID_USER_KEY`，说明路径与 TLS 正常，**电动车子路径存在**。
-- ✅ 海外域名 `https://sg-restapi.opnavi.com/v3/direction/driving` 也可达（同样返回 `INVALID_USER_KEY`）。
-- ✅ 路径规划 2.0 文档明确支持驾车/公交/步行/骑行/电动车；**必须传 `show_fields=polyline,cost`** 才返回折线与耗时。
-- ✅ 坐标：高德输入输出均为 **GCJ-02**。
-- ⚠️ 待验证（需要真 Key）：五个方式的实际返回结构、电动车是否可用、各方式距离/途经点上限、QPS/日配额、海外权限。
-- ⚠️ 高德海外属于 premium 服务，需提工单授权；海外走 v3、域名不同，且**自行车/电动车覆盖不确定**。所以境外不依赖高德。
+同一组上海起终点（WGS 31.2304,121.4737 → 31.2454,121.4987；GCJ 偏移 481 m）：
+
+| 方式 | 路径数 | 距离 | 耗时 | steps | 折线点 |
+|---|---|---|---|---|---|
+| driving | 3（含备选） | 4,722 m | 1,127 s（`cost.duration`） | 11 | 119 |
+| walking | 1 | 5,831 m | 4,665 s（`cost.duration`） | 19 | 272 |
+| bicycling | 1 | 6,394 m | `path.duration`（`cost` 为 null） | 23 | 343 |
+| electrobike | 1 | 6,391 m | `path.duration`（`cost` 为 null） | 20 | 341 |
+
+**解析要点（都已实测，按这个实现）**
+
+- 折线在 `route.paths[].steps[].polyline`，格式 `lon,lat;lon,lat`，需要逐 step 拼接；
+- **必须传 `show_fields=polyline,cost`**：不传时 path 只有 `distance/restriction/steps`，没有 polyline、没有 cost；
+- 耗时字段不统一：**驾车/步行在 `path.cost.duration`，骑行/电动车在 `path.duration`**（骑行/电动车 `cost` 为 null）→ 统一取 `path.duration or path.cost.duration`；
+- 距离在 `path.distance`（米）；驾车返回多条备选，取 `paths[0]`；
+- 坐标：输入按 **GCJ-02** 解释，输出也是 GCJ-02。实测直接把 WGS 传进去，高德会从偏移约 481 m 的位置起算；回显的 `route.origin/destination` 与输入 GCJ 完全一致；
+- **途经点只有驾车支持**；步行/骑行/电动车带 `waypoints` 返回 `21002 HAVE_NO_PERMISSION` → 必须逐段串行（与第 7 节一致）；
+- 驾车 5 个途经点可正常返回（未报上限错误）；
+- 距离上限：步行 上海→北京（约 1060 km）返回 `20803 OVER_DIRECTION_RANGE`；
+- 其他错误：非法坐标/海上点 → `20802 ROUTE_FAIL`；公交端点 `/v5/direction/transit` 不存在（404，本期不接公交）；
+- **海外权限：当前 Key 无**。国内端点用巴黎坐标返回 `20802`；海外端点 `sg-restapi.opnavi.com` 返回 `10012 INSUFFICIENT_PRIVILEGES` → 境外必须走 Valhalla（或申请海外权限）；
+- 待确认：QPS/日配额以高德控制台为准（代码里做退避与配额错误提示）。
 
 ### 3.2 Valhalla（境外）
 
@@ -247,10 +263,12 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 
 | 来源 | 处理 |
 |---|---|
-| 无 Key / Key 无效 | 配置错误，`retryable:false`，提示去配置 |
-| 配额超限 / QPS 过高 | `retryable:true`，退避后重试；提示明日额度或换网络 |
-| 无可用路线（Valhalla 171 / 高德 20800 等） | `retryable:true`，提示换点/换方式 |
-| 超距离上限（Valhalla 154，1,500 km） | `retryable:false`，提示路线过长 |
+| 无 Key / Key 无效（高德 `10001`） | 配置错误，`retryable:false`，提示去配置 |
+| 无海外权限（高德 `10012`，实测当前 Key 就是） | `retryable:false`，提示改用境外路线服务 |
+| 方式不支持途经点（高德 `21002`） | 内部路由，不暴露给用户（一律逐段规划） |
+| 配额超限 / QPS 过高（高德 `10003` / `10004`） | `retryable:true`，退避后重试；提示明日额度 |
+| 无可用路线（Valhalla `171`、高德 `20802`） | `retryable:true`，提示换点/换方式 |
+| 超距离上限（Valhalla `154` 1,500 km、高德 `20803`） | `retryable:false`，提示路线过长 |
 | 网络超时 | `retryable:true`，自动退避 1 次后报错 |
 | 拼接接缝异常 | warning，不阻断；必要时报错 |
 
@@ -290,7 +308,7 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 | 高德 Key 无海外权限 | 境外不能用高德 | 境外用 Valhalla（已定） |
 | Valhalla demo 不稳定/限流 | 境外规划失败 | 错误可重试；将来可换 Google/自建 |
 | 区域多边形误判边境 | 走错 provider | 路线级保守判定 + 多边形测试；真机抽查 |
-| 高德返回结构/电动车不可用 | 需要调整解析 | P0 用真 Key 验证后再定稿解析 |
+| 高德耗时字段不统一（`cost.duration` / `path.duration`） | 解析错误 | 已实测，统一取 `path.duration or path.cost.duration` |
 | GCJ 转换错误 | 定位整体偏移 | 边界转换 + 单测 + 真机抽查 |
 | 6 次调用超配额 | 规划失败 | 防抖 + 缓存 + 配额提示 |
 | 1 Hz 高速移动观感 | 每跳 14–28 m | 与真实 GPS 一致；必要时提频（需修 LP-12） |
@@ -301,17 +319,18 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 | 阶段 | 内容 | 估算 | 状态 |
 |---|---|---|---|
 | P0（已完成） | Valhalla、坐标系、区域多边形、高德端点可达性 | 0.5 天 | ✅ |
-| P0（待 Key） | 高德五方式真实调用、返回结构、上限、配额、海外权限 | 0.5–1 天 | ⏳ 需要真 Key |
+| P0（真 Key 验证） | 高德四种方式真实调用、`show_fields`、耗时字段、途经点限制、错误码、海外权限 | 0.5 天 | ✅ |
 | P1 | provider 抽象 + 高德 + Valhalla + 区域判定 + 逐段拼接 + 速度模型 + API + 前置修复 | 2–2.5 天 | 待开始 |
 | P2 | RouteSession + EngineClient + 路线 UI | 2–3 天 | 待开始 |
 | P3 | 真机/境外联调、速度观感、错误与重试 | 1–1.5 天 | 待开始 |
 
 ## 15. 待办 / 待确认
 
-1. **高德真 Key**：由维护者写入 `~/.locpilot/settings.json` 或 `LOCPILOT_AMAP_KEY` 后，跑 P0 剩余验证（不打印 Key）。
+1. ✅ 高德真 Key 验证已完成（Key 存于 `~/Library/Application Support/LocPilot/settings.json`，0600；不进仓库/安装包）。
 2. **MapKit 坐标**：真机确认点击坐标是 WGS-84（拿已知点与高德 GCJ 点对比）。
-3. **文档入库**：确认后提交到 `docs/route-mode-design.md`。
-4. 高德海外权限是否申请（决定未来境外是否统一回高德）；Google 是否接入（备用）。
+3. **iOS 速度上报**：真机确认 1 Hz 下发时 `CLLocation.speed`/course 是否合理。
+4. **QPS/日配额**：以高德控制台为准；P1 实现退避与配额提示。
+5. 高德海外权限是否申请（决定未来境外是否统一回高德）；Google 是否接入（备用）。
 
 ## 16. 数据与许可
 

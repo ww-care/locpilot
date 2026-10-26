@@ -22,6 +22,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from contextlib import AsyncExitStack
 
@@ -29,24 +30,34 @@ PROTOCOL_VERSION = 1
 
 
 class Session:
-    """持有 lockdown/RSD 与定位服务的一次性会话。"""
+    """持有 lockdown/RSD 与定位服务。
+
+    iOS 17+ 的 DVT 定位通道在长时间闲置后会静默失效（set 仍返回成功但设备不更新）。
+    因此每次下发前检查闲置时长，超过 TTL 就重建定位通道；RSD/lockdown 保持不动。
+    """
 
     def __init__(self) -> None:
         self.stack = AsyncExitStack()
+        self.location_stack = AsyncExitStack()
         self.lockdown = None
+        self.provider = None
         self.simulation = None
         self.mode = None
         self.product_version = None
         self.udid = None
         self.detail = {}
+        self.refresh_ttl = 120.0
+        self.refreshes = 0
+        self._last_location = 0.0
 
-    async def open(self, udid=None, rsd=None, tunnel=None, mount=False) -> dict:
+    async def open(self, udid=None, rsd=None, tunnel=None, mount=False, ttl: float = 120.0) -> dict:
         await self.close()
         from pymobiledevice3.lockdown import create_using_usbmux
 
         self.lockdown = await create_using_usbmux(serial=udid, autopair=False)
         self.product_version = await self._product_version(self.lockdown)
         self.udid = getattr(self.lockdown, "identifier", None) or udid
+        self.refresh_ttl = max(0.0, float(ttl or 0.0))
         major = self._major(self.product_version)
 
         if mount:
@@ -54,14 +65,30 @@ class Session:
 
         if major is not None and major >= 17:
             provider = await self._rsd_provider(udid, rsd=rsd, tunnel=tunnel)
-            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
-            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
-
+            self.provider = provider
             closer = getattr(provider, "close", None)
             if callable(closer):
                 self.detail["rsd_closer"] = type(provider).__name__
                 self.stack.push_async_callback(closer)
-            dvt = await self._enter(DvtProvider(provider))
+
+        await self._open_location(major)
+        self._last_location = time.monotonic()
+        self.detail.update({
+            "mode": self.mode,
+            "product_version": self.product_version,
+            "udid": self.udid,
+            "refresh_ttl": self.refresh_ttl,
+        })
+        return dict(self.detail)
+
+    async def _open_location(self, major) -> None:
+        if major is not None and major >= 17:
+            if self.provider is None:
+                raise RuntimeError("RSD 会话尚未建立")
+            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+
+            dvt = await self._enter(DvtProvider(self.provider))
             self.simulation = await self._enter(LocationSimulation(dvt))
             self.mode = "dvt"
         else:
@@ -70,22 +97,51 @@ class Session:
             self.simulation = await self._enter(DtSimulateLocation(self.lockdown))
             self.mode = "legacy"
 
-        self.detail.update({"mode": self.mode, "product_version": self.product_version, "udid": self.udid})
-        return dict(self.detail)
+    def _should_refresh(self) -> bool:
+        if self.refresh_ttl <= 0 or self._last_location <= 0:
+            return False
+        return (time.monotonic() - self._last_location) >= self.refresh_ttl
+
+    async def refresh(self) -> dict:
+        """重建定位通道（保留 RSD/lockdown），用于闲置后唤醒。"""
+        if self.lockdown is None:
+            raise RuntimeError("会话尚未打开")
+        try:
+            await self.location_stack.aclose()
+        except Exception:
+            pass
+        self.location_stack = AsyncExitStack()
+        self.simulation = None
+        await self._open_location(self._major(self.product_version))
+        self.refreshes += 1
+        self._last_location = time.monotonic()
+        self.detail["refreshes"] = self.refreshes
+        return {"mode": self.mode, "refreshes": self.refreshes}
 
     async def set(self, lat: float, lon: float) -> dict:
         if self.simulation is None:
             raise RuntimeError("会话尚未打开")
+        if self._should_refresh():
+            await self.refresh()
         await self.simulation.set(float(lat), float(lon))
-        return {"mode": self.mode, "lat": float(lat), "lon": float(lon)}
+        self._last_location = time.monotonic()
+        return {"mode": self.mode, "lat": float(lat), "lon": float(lon), "refreshes": self.refreshes}
 
     async def clear(self) -> dict:
         if self.simulation is None:
             raise RuntimeError("会话尚未打开")
+        if self._should_refresh():
+            await self.refresh()
         await self.simulation.clear()
-        return {"mode": self.mode, "cleared": True}
+        self._last_location = time.monotonic()
+        return {"mode": self.mode, "cleared": True, "refreshes": self.refreshes}
 
     async def close(self) -> None:
+        try:
+            await self.location_stack.aclose()
+        except Exception:
+            pass
+        self.location_stack = AsyncExitStack()
         try:
             await self.stack.aclose()
         except Exception:
@@ -96,15 +152,18 @@ class Session:
             if callable(closer):
                 await closer()
         self.simulation = None
+        self.provider = None
         self.lockdown = None
         self.mode = None
+        self.refreshes = 0
+        self._last_location = 0.0
         self.detail = {}
 
     # --- 内部 ----------------------------------------------------------
     async def _enter(self, obj):
         """兼容有/无 __aenter__ 的服务对象。"""
         if hasattr(obj, "__aenter__"):
-            return await self.stack.enter_async_context(obj)
+            return await self.location_stack.enter_async_context(obj)
         return obj
 
     @staticmethod
@@ -205,6 +264,7 @@ def handle(bridge: Bridge, session: Session, message: dict) -> dict:
                 rsd=message.get("rsd"),
                 tunnel=message.get("tunnel"),
                 mount=bool(message.get("mount")),
+                ttl=float(message.get("ttl") or 120.0),
             ),
             timeout=float(message.get("timeout") or 120.0),
         )
@@ -212,6 +272,8 @@ def handle(bridge: Bridge, session: Session, message: dict) -> dict:
         return bridge.call(session.set(message.get("lat"), message.get("lon")), timeout=float(message.get("timeout") or 20.0))
     if cmd == "clear":
         return bridge.call(session.clear(), timeout=float(message.get("timeout") or 20.0))
+    if cmd == "refresh":
+        return bridge.call(session.refresh(), timeout=float(message.get("timeout") or 20.0))
     if cmd == "close":
         bridge.call(session.close(), timeout=20.0)
         return {"closed": True}

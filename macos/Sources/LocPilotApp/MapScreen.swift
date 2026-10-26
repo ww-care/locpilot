@@ -13,28 +13,33 @@ struct MapScreen: View {
                 if state.mapMode == .teleport, let marker = state.marker {
                     // anchor: .bottom = 组件的底边中心（也就是针尖）钉在坐标上，
                     // 所有缩放/旋转都以它为轴，保证针尖不动（规格 §3 / §13）。
-                    Annotation("", coordinate: CLLocationCoordinate2D(latitude: marker.lat, longitude: marker.lon), anchor: .bottom) {
+                    // 位置存 WGS-84，MapKit 需要 GCJ-02。
+                    let shown = ChinaCoordinate.display(lat: marker.lat, lon: marker.lon)
+                    Annotation("", coordinate: CLLocationCoordinate2D(latitude: shown.lat, longitude: shown.lon), anchor: .bottom) {
                         MapLocationPin(animator: state.pin, label: marker.label)
                     }
                 }
 
                 if state.mapMode == .route, let route = state.routeSession {
                     if let plan = route.plan {
-                        MapPolyline(coordinates: plan.geometry.map {
-                            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+                        MapPolyline(coordinates: plan.geometry.map { point in
+                            let shown = ChinaCoordinate.display(lat: point.lat, lon: point.lon)
+                            return CLLocationCoordinate2D(latitude: shown.lat, longitude: shown.lon)
                         })
                         .stroke(Color.accentColor.opacity(0.9),
                                 style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                     }
                     // 设备当前位置：路线模式下必须有这个点，否则"手机在哪"只能靠猜。
                     if let position = state.position {
-                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: position.lat, longitude: position.lon), anchor: .center) {
+                        let shown = ChinaCoordinate.display(lat: position.lat, lon: position.lon)
+                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: shown.lat, longitude: shown.lon), anchor: .center) {
                             CurrentPositionDot()
                         }
                     }
                     ForEach(route.points) { point in
                         let index = route.points.firstIndex(where: { $0.id == point.id }) ?? 0
-                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon), anchor: .center) {
+                        let shown = ChinaCoordinate.display(lat: point.lat, lon: point.lon)
+                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: shown.lat, longitude: shown.lon), anchor: .center) {
                             RoutePointMarker(
                                 index: index,
                                 count: route.pointCount,

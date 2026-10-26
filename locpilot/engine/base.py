@@ -134,6 +134,8 @@ class Engine:
         self.opened = False
         self.last_position: Optional[dict] = None
         self.error: Optional[str] = None
+        # 定位通道被 worker 自动重建的次数（闲置超过 TTL 时 +1）
+        self.refresh_count = 0
 
     # --- 契约 ----------------------------------------------------------
     def availability(self) -> tuple:

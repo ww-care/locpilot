@@ -372,4 +372,8 @@ registerPinAnimatorTests()
 
 registerRouteSessionTests()
 
+// MARK: - 中国区坐标转换（用例见 ChinaCoordinateTests.swift）
+
+registerChinaCoordinateTests()
+
 finish()

@@ -104,6 +104,7 @@ ENGINE_SETTING_KEYS = (
     "worker",
     "auto_mount",
     "open_timeout",
+    "location_session_ttl",
     "rsd",
     "tunnel",
     "pmd3_bin",
@@ -132,6 +133,7 @@ _ENV_KEYS = {
     "LOCPILOT_AMAP_KEY": "amap_key",
     "LOCPILOT_ROUTING_PROVIDER": "routing_provider",
     "LOCPILOT_VALHALLA_URL": "valhalla_url",
+    "LOCPILOT_LOCATION_SESSION_TTL": "location_session_ttl",
 }
 
 
@@ -226,6 +228,8 @@ def env_overrides() -> Dict[str, Any]:
                 continue
         elif name == "tick_interval":
             value = _as_float(value, TICK_INTERVAL)
+        elif name == "location_session_ttl":
+            value = _as_float(value, 120.0)
         out[name] = value
     return out
 

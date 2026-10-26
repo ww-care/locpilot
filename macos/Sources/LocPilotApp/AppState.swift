@@ -56,12 +56,12 @@ final class AppState: ObservableObject {
     }
     @Published private(set) var lastMessage: String?
     @Published var camera: MapCameraPosition = .region(
-        MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737),
+        MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 31.228458, longitude: 121.478223),
                            latitudinalMeters: 8000, longitudinalMeters: 8000))
     /// 当前可见区域：由 Map 的 onMapCameraChange 回填。MapCameraPosition 是 struct，
     /// 取不回 region，所以缩放/定位都以这个值为基准。
     @Published private(set) var visibleRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737),
+        center: CLLocationCoordinate2D(latitude: 31.228458, longitude: 121.478223),
         latitudinalMeters: 8000, longitudinalMeters: 8000)
     @Published var showInstaller = false
     /// 鼠标是否停在窗口顶部：用于浮现半透明标题栏提示。
@@ -167,14 +167,18 @@ final class AppState: ObservableObject {
         deviceName = snapshot.engine.device?.name
         position = snapshot.position
         connection = snapshot.engine.opened ? .online : (snapshot.error == nil ? .offline : .failed(snapshot.error ?? ""))
-        if let pos = snapshot.position {
-            // 后端已经有位置（例如刚连上或别的客户端设过）：针直接落下，不再播动效
-            if !isPinAnimating, marker == nil || (!isPinAnimating && (marker?.lat != pos.lat || marker?.lon != pos.lon)) {
-                marker = Marker(lat: pos.lat, lon: pos.lon, label: marker?.label ?? "")
-                Task { [weak self] in await self?.resolveLabel(lat: pos.lat, lon: pos.lon) }
+        // 只有传送模式才维护落针与反查地名；路线模式有独立的绿点，
+        // 否则回放时每秒都会打一次 Nominatim（日志里那堆 400 就是它）。
+        if mapMode == .teleport {
+            if let pos = snapshot.position {
+                // 后端已经有位置（例如刚连上或别的客户端设过）：针直接落下，不再播动效
+                if !isPinAnimating, marker == nil || (!isPinAnimating && (marker?.lat != pos.lat || marker?.lon != pos.lon)) {
+                    marker = Marker(lat: pos.lat, lon: pos.lon, label: marker?.label ?? "")
+                    Task { [weak self] in await self?.resolveLabel(lat: pos.lat, lon: pos.lon) }
+                }
+            } else if !isPinAnimating {
+                marker = nil
             }
-        } else if !isPinAnimating {
-            marker = nil
         }
         // 跟随定位：只要位置真的变了就把镜头带过去（用户手动平移不会被抢，因为位置没变）
         if followsPosition, let pos = snapshot.position, pos != lastFollowTarget {
@@ -185,7 +189,8 @@ final class AppState: ObservableObject {
         // 例外：首次拿到位置时居中一次，让用户一打开就看到手机在哪。
         if !didInitialCenter, let pos = snapshot.position {
             didInitialCenter = true
-            moveCamera(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: pos.lat, longitude: pos.lon),
+            let center = ChinaCoordinate.display(lat: pos.lat, lon: pos.lon)
+            moveCamera(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: center.lat, longitude: center.lon),
                                           latitudinalMeters: 4000, longitudinalMeters: 4000),
                        duration: 0.6)
         }
@@ -304,10 +309,12 @@ final class AppState: ObservableObject {
     }
 
     /// 地图点击统一入口：传送模式=改定位；路线模式=加点。
+    /// 注意：MapKit 在中国大陆返回 GCJ-02 坐标，业务层（后端/设备）一律用 WGS-84。
     func handleMapTap(lat: Double, lon: Double) async {
+        let target = ChinaCoordinate.wgs(lat: lat, lon: lon)
         if mapMode == .route {
             guard let route = routeSession else { return }
-            if !route.addPoint(lat: lat, lon: lon) {
+            if !route.addPoint(lat: target.lat, lon: target.lon) {
                 if route.pointCount >= route.maxPoints {
                     flash("最多 7 个点")
                 } else {
@@ -315,7 +322,7 @@ final class AppState: ObservableObject {
                 }
             }
         } else {
-            await selectLocation(lat: lat, lon: lon)
+            await selectLocation(lat: target.lat, lon: target.lon)
         }
     }
 
@@ -356,7 +363,9 @@ final class AppState: ObservableObject {
     }
 
     func routeMove(_ id: UUID, lat: Double, lon: Double) {
-        routeSession?.movePoint(id, lat: lat, lon: lon)
+        // 拖动回调给的是地图坐标（大陆为 GCJ-02），路线点内部统一存 WGS-84。
+        let target = ChinaCoordinate.wgs(lat: lat, lon: lon)
+        routeSession?.movePoint(id, lat: target.lat, lon: target.lon)
     }
 
     func routeRemove(_ id: UUID) {
@@ -376,12 +385,15 @@ final class AppState: ObservableObject {
             minLon = min(minLon, point.lon)
             maxLon = max(maxLon, point.lon)
         }
-        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+        // 路线几何是 WGS-84；相机要用 GCJ-02。
+        let center = ChinaCoordinate.display(lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2)
         let span = MKCoordinateSpan(
             latitudeDelta: max((maxLat - minLat) * 1.35, 0.004),
             longitudeDelta: max((maxLon - minLon) * 1.35, 0.004))
         didInitialCenter = true
-        moveCamera(MKCoordinateRegion(center: center, span: span), duration: 0.6)
+        moveCamera(MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: center.lat, longitude: center.lon), span: span),
+                   duration: 0.6)
     }
 
     // MARK: - 相机
@@ -403,8 +415,10 @@ final class AppState: ObservableObject {
 
     private func centerCamera(on position: LatLon, spanMeters: Double) {
         didInitialCenter = true
+        // 相机/地图使用 GCJ-02，位置是 WGS-84。
+        let center = ChinaCoordinate.display(lat: position.lat, lon: position.lon)
         moveCamera(MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: position.lat, longitude: position.lon),
+            center: CLLocationCoordinate2D(latitude: center.lat, longitude: center.lon),
             latitudinalMeters: spanMeters, longitudinalMeters: spanMeters),
                    duration: 0.45)
     }
@@ -413,7 +427,8 @@ final class AppState: ObservableObject {
         guard let position else { flash("还没有设定位置，点一下地图即可"); return }
         didInitialCenter = true
         let span = currentSpanMeters
-        moveCamera(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: position.lat, longitude: position.lon),
+        let center = ChinaCoordinate.display(lat: position.lat, lon: position.lon)
+        moveCamera(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: center.lat, longitude: center.lon),
                                       latitudinalMeters: max(span, 1500), longitudinalMeters: max(span, 1500)),
                    duration: 0.45)
     }

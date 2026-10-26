@@ -290,6 +290,8 @@ class PyMobileDevice3Engine(Engine):
                         "rsd": self.settings.get("rsd"),
                         "tunnel": self.settings.get("tunnel"),
                         "timeout": float(self.settings.get("open_timeout", 180.0)),
+                        # 定位通道闲置超过 TTL 后由 worker 自动重建（iOS 27 会话会静默失效）
+                        "ttl": float(self.settings.get("location_session_ttl", 120.0)),
                     },
                     timeout=float(self.settings.get("open_timeout", 180.0)) + 10.0,
                 )
@@ -326,7 +328,9 @@ class PyMobileDevice3Engine(Engine):
         self.require_open()
         try:
             if self._worker is not None:
-                self._worker.request({"cmd": "set", "lat": float(lat), "lon": float(lon)}, timeout=25.0)
+                detail = self._worker.request(
+                    {"cmd": "set", "lat": float(lat), "lon": float(lon)}, timeout=25.0)
+                self.refresh_count = int((detail or {}).get("refreshes") or 0)
             else:
                 self._cli_set(lat, lon)
         except EngineError as exc:
@@ -399,6 +403,7 @@ class PyMobileDevice3Engine(Engine):
             "binary": self.binary(),
             "worker_python": self.worker_python(),
             "worker_stderr": self._worker.stderr_tail() if self._worker else "",
+            "refresh_count": self.refresh_count,
             "home_override": self._home_override or self.settings.get("pmd3_home") or os.environ.get("LOCPILOT_PMD3_HOME"),
             "home_fallback_used": self.home_fallback_used,
         })

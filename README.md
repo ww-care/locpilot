@@ -222,7 +222,7 @@ bash macos/dist.sh
 * **iOS 17+ 的定位随连接存活**：DVT 连接断开即恢复真实定位，所以必须保持 App / 服务运行。
 * **iOS ≤16 的定位是设备侧状态**：进程退出后仍保持，需 `clear`（或重启）才恢复。
 * 需要开发者模式与 Developer Disk Image；锁屏 / 未信任设备无法工作。
-* 原生版地图由 MapKit 提供，需要联网（Apple 地图服务）。中国区数据源即高德，对外坐标仍是 WGS-84，**不需要自行做 GCJ-02 纠偏**。
+* 原生版地图由 MapKit 提供，需要联网（Apple 地图服务）。**注意：macOS MapKit 在中国大陆返回/使用 GCJ-02 坐标**，而设备与后端统一用 WGS-84；App 在点击/拖动时 GCJ→WGS、绘制时 WGS→GCJ，境外与港澳台不转换（`macos/Sources/LocPilotKit/ChinaCoordinate.swift`）。
 
 ## 8. 故障排查
 

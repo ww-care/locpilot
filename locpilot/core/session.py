@@ -60,6 +60,7 @@ class Session:
         self._subscribers: List[Callable[[str, dict], None]] = []
         self._ticker: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._last_refresh_count = 0
         self.places = PlaceClient(
             base_url=config.NOMINATIM_URL,
             timeout=config.HTTP_TIMEOUT,
@@ -83,6 +84,20 @@ class Session:
         if level in ("error", "warn"):
             self.emit("log", entry)
         return entry
+
+    def _note_engine_refresh(self, engine) -> None:
+        """worker 在闲置超过 TTL 后会自动重建定位通道；这里只负责让用户看到日志。"""
+        try:
+            count = int(getattr(engine, "refresh_count", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if count < self._last_refresh_count:
+            # 新引擎实例从 0 开始，不要误报
+            self._last_refresh_count = count
+            return
+        if count != self._last_refresh_count:
+            self._last_refresh_count = count
+            self.log("定位通道已自动刷新（闲置超过 TTL）", "info")
 
     def subscribe(self, callback: Callable[[str, dict], None]) -> Callable[[], None]:
         with self.lock:
@@ -153,7 +168,8 @@ class Session:
         )
 
     def _engine_settings(self) -> dict:
-        keys = ("pmd3_bin", "pmd3_python", "pmd3_home", "goios_bin", "worker", "auto_mount", "rsd", "tunnel", "open_timeout", "offline")
+        keys = ("pmd3_bin", "pmd3_python", "pmd3_home", "goios_bin", "worker", "auto_mount",
+                "rsd", "tunnel", "open_timeout", "location_session_ttl", "offline")
         return {k: self.settings[k] for k in keys if k in self.settings}
 
     def _fallback_for(self, name: str, reports: List[dict]) -> Optional[tuple]:
@@ -249,6 +265,7 @@ class Session:
                 self.playback.stop()
                 self.log("手动传送，已停止路线回放", "warn")
             engine.set_location(lat, lon)
+            self._note_engine_refresh(engine)
             self.current = {"lat": lat, "lon": lon, "ts": time.time(), "source": source, "label": label}
             self.error = None
             entry = self.store.add_history(lat, lon, label=label, source=source)
@@ -428,6 +445,7 @@ class Session:
                 return None
             try:
                 engine.set_location(position["lat"], position["lon"])
+                self._note_engine_refresh(engine)
             except EngineError as exc:
                 self.playback.pause()
                 self.error = str(exc)

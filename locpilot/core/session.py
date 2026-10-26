@@ -359,10 +359,14 @@ class Session:
                 raise PlaybackError("当前没有路线可导出")
             return to_gpx(self.route.geometry, name=self.route.name or "LocPilot route", description="由 LocPilot 导出")
 
-    def route_summary(self) -> dict:
+    def route_summary(self, include_geometry: bool = True) -> dict:
         if self.route is None:
             return {"loaded": False}
         data = self.route.to_dict()
+        if not include_geometry:
+            # 快照每秒推送，几百个点的几何会白白放大 SSE 负载；
+            # 原生界面在 /api/route 的响应里已经拿到几何，这里只给摘要。
+            data.pop("geometry", None)
         data["loaded"] = True
         data["waypoint_count"] = len(self.route.waypoints)
         data["geometry_count"] = len(self.route.geometry)
@@ -522,7 +526,7 @@ class Session:
                 },
                 "position": self.current,
                 "playback": self.playback.status(),
-                "route": self.route_summary(),
+                "route": self.route_summary(include_geometry=False),
                 "error": self.error,
                 "settings": {
                     "tick_interval": self.settings.get("tick_interval", config.TICK_INTERVAL),

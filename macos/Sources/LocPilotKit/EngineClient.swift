@@ -4,6 +4,11 @@ import Foundation
 public struct LatLon: Codable, Sendable, Equatable {
     public let lat: Double
     public let lon: Double
+
+    public init(lat: Double, lon: Double) {
+        self.lat = lat
+        self.lon = lon
+    }
 }
 
 /// 后端状态快照。字段与 locpilot/core/session.py 的 snapshot() 一一对应，
@@ -33,10 +38,96 @@ public struct StatusSnapshot: Decodable, Sendable {
         public let mode: String?
         public let device: Device?
     }
+
+    /// 路线摘要（快照里不含 geometry，避免 SSE 每秒推几百个点）。
+    public struct RouteState: Decodable, Sendable {
+        public let loaded: Bool
+        public let mode: String?
+        public let provider: String?
+        public let distance: Double?
+        public let waypointCount: Int?
+        public let warnings: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case loaded, mode, provider, distance, warnings
+            case waypointCount = "waypoint_count"
+        }
+    }
+
+    /// 回放状态（/api/status 与 /api/route/* 的结果同形）。
+    public struct PlaybackState: Decodable, Sendable {
+        public let state: String
+        public let mode: String?
+        public let speed: Double
+        public let speedBase: Double?
+        public let progress: Double
+        public let distance: Double
+        public let totalDistance: Double
+        public let remainingDistance: Double?
+        public let etaSeconds: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case state, mode, speed, progress, distance
+            case speedBase = "speed_base"
+            case totalDistance = "total_distance"
+            case remainingDistance = "remaining_distance"
+            case etaSeconds = "eta_seconds"
+        }
+
+        public init(state: String, mode: String? = nil, speed: Double = 0,
+                    speedBase: Double? = nil, progress: Double = 0, distance: Double = 0,
+                    totalDistance: Double = 0, remainingDistance: Double? = nil,
+                    etaSeconds: Double? = nil) {
+            self.state = state
+            self.mode = mode
+            self.speed = speed
+            self.speedBase = speedBase
+            self.progress = progress
+            self.distance = distance
+            self.totalDistance = totalDistance
+            self.remainingDistance = remainingDistance
+            self.etaSeconds = etaSeconds
+        }
+    }
+
     public let app: AppInfo
     public let engine: Engine
     public let position: LatLon?
     public let error: String?
+    public let route: RouteState?
+    public let playback: PlaybackState?
+}
+
+/// /api/route 的规划结果（geometry 为 [[lat, lon], ...]，WGS-84）。
+public struct RoutePlanResult: Decodable, Sendable {
+    public let loaded: Bool
+    public let mode: String?
+    public let provider: String?
+    public let distance: Double?
+    public let duration: Double?
+    public let geometry: [[Double]]
+    public let warnings: [String]?
+    public let routed: Bool?
+
+    public init(loaded: Bool = true, mode: String? = nil, provider: String? = nil,
+                distance: Double? = nil, duration: Double? = nil,
+                geometry: [[Double]] = [], warnings: [String]? = nil, routed: Bool? = nil) {
+        self.loaded = loaded
+        self.mode = mode
+        self.provider = provider
+        self.distance = distance
+        self.duration = duration
+        self.geometry = geometry
+        self.warnings = warnings
+        self.routed = routed
+    }
+
+    public var coordinates: [LatLon] {
+        geometry.compactMap { pair in
+            guard pair.count >= 2 else { return nil }
+            return LatLon(lat: pair[0], lon: pair[1])
+        }
+    }
 }
 
 /// 与后端 REST + SSE 的唯一通道。UI 只依赖这一层，方便单测。
@@ -86,7 +177,7 @@ public actor EngineClient {
         let (data, response) = try await session.data(for: request(path, method: method, body: body))
         guard let http = response as? HTTPURLResponse else { throw EngineError.transport("无 HTTP 响应") }
         guard (200..<300).contains(http.statusCode) else {
-            // 后端错误体是 {"ok": false, "error": "..."}：ok 是 Bool，
+            // 后端错误体是 {"ok": false, "error": "…"}：ok 是 Bool，
             // 用 [String: String] 整体解码会失败，用户就只能看到 "HTTP 503"。
             let message = (try? JSONDecoder().decode(BackendErrorBody.self, from: data))?.error
             throw EngineError.backend(message ?? "HTTP \(http.statusCode)")
@@ -126,6 +217,37 @@ public actor EngineClient {
 
     public func clear() async throws {
         _ = try await send("api/clear", method: "POST", body: [:], as: EmptyResponse.self)
+    }
+
+    // MARK: - 路线
+
+    /// 规划路线。points 为 WGS-84；mode 见 TravelMode；provider=auto 时后端按区域选择。
+    public func planRoute(points: [LatLon], mode: String, provider: String = "auto",
+                          jitter: Double? = nil, seed: Int? = nil) async throws -> RoutePlanResult {
+        var body: [String: Any] = [
+            "points": points.map { [$0.lat, $0.lon] },
+            "mode": mode,
+            "provider": provider,
+        ]
+        if let jitter { body["jitter"] = jitter }
+        if let seed { body["seed"] = seed }
+        return try await send("api/route", method: "POST", body: body, as: RoutePlanResult.self)
+    }
+
+    public func startRoute() async throws -> StatusSnapshot.PlaybackState {
+        try await send("api/route/start", method: "POST", body: [:], as: StatusSnapshot.PlaybackState.self)
+    }
+
+    public func pauseRoute() async throws -> StatusSnapshot.PlaybackState {
+        try await send("api/route/pause", method: "POST", body: [:], as: StatusSnapshot.PlaybackState.self)
+    }
+
+    public func resumeRoute() async throws -> StatusSnapshot.PlaybackState {
+        try await send("api/route/resume", method: "POST", body: [:], as: StatusSnapshot.PlaybackState.self)
+    }
+
+    public func stopRoute() async throws -> StatusSnapshot.PlaybackState {
+        try await send("api/route/stop", method: "POST", body: [:], as: StatusSnapshot.PlaybackState.self)
     }
 
     // MARK: - 事件流
@@ -189,6 +311,8 @@ public actor EngineClient {
     }
 }
 
+extension EngineClient: RouteServicing {}
+
 public struct EmptyResponse: Decodable, Sendable {}
 
 /// /api/reverse 的地点信息（字段来自 Nominatim）。
@@ -208,7 +332,7 @@ public struct Place: Decodable, Sendable {
     public var shortLabel: String? { label ?? name ?? displayName }
 }
 
-/// 后端错误体：{"ok": false, "error": "..."}
+/// 后端错误体：{"ok": false, "error": "…", "retryable": …, "code": …}
 struct BackendErrorBody: Decodable {
     let error: String?
 }

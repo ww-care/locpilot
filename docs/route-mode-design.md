@@ -250,14 +250,15 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 
 ## 9. 原生 UI
 
-- 模式切换：传送 / 路线。
-- 路线编辑：点击加点（≤7）、拖动移动、右键或 Delete 删除、清空；起点/终点/途经点用不同样式 + 编号。
-- 交通方式选择：6 个预设（分段控件或菜单）；切换后自动重新规划。
-- 规划状态：编辑后防抖自动规划；loading；失败显示原因 + 「重试」。
-- 绘制：`MapPolyline`（target macOS 26 可用），规划完成后按 bounds 自动取景。
-- 播放：开始/暂停/继续/停止；进度条 + 剩余距离 + ETA + 瞬时速度；播放时跟随，停止后恢复原镜头。
+- 模式切换：传送 / 路线（底部「路线」入口；路线面板右上 × 退出）。
+- 路线编辑：点击加点（≤7）、拖动移动、右键删除、清空；起点/终点/途经点用不同颜色 + 编号。
+- 交通方式选择：6 个预设（菜单）；切换后自动重新规划。
+- 规划状态：编辑后防抖自动规划；规划中显示 spinner；失败显示原因 + 「重试」。
+- 绘制：`MapPolyline`，规划完成后按 bounds 自动取景。
+- 播放：开始/暂停/继续/停止；进度条 + 距离 + ETA + 瞬时速度；播放时跟随，停止后恢复原镜头。
 - 播放中禁用编辑（符合决策 8）。
-- 代码组织：新增 `RouteSession`（LocPilotKit，可测试），`AppState` 只做绑定；`EngineClient` 增加 planRoute/start/pause/resume/stop；`StatusSnapshot` 增加 `route`/`playback` 解析。
+- 代码组织：`RouteSession` 在 LocPilotKit（@MainActor、可测试），`AppState` 做绑定与相机；`EngineClient` 增加 planRoute/start/pause/resume/stop；`StatusSnapshot` 增加 `route`/`playback` 解析。
+- 实现状态：✅ 已完成（见第 18 节）。
 
 ## 10. 错误与重试
 
@@ -321,7 +322,7 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 | P0（已完成） | Valhalla、坐标系、区域多边形、高德端点可达性 | 0.5 天 | ✅ |
 | P0（真 Key 验证） | 高德四种方式真实调用、`show_fields`、耗时字段、途经点限制、错误码、海外权限 | 0.5 天 | ✅ |
 | P1 | provider 抽象 + 高德 + Valhalla + 区域判定 + 逐段拼接 + 速度模型 + API + 前置修复 | 2–2.5 天 | ✅ 已完成 |
-| P2 | RouteSession + EngineClient + 路线 UI | 2–3 天 | 待开始 |
+| P2 | RouteSession + EngineClient + 路线 UI | 2–3 天 | ✅ 已完成 |
 | P3 | 真机/境外联调、速度观感、错误与重试 | 1–1.5 天 | 待开始 |
 
 ## 15. 待办 / 待确认
@@ -377,3 +378,34 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 - 自动重试/退避：按"让用户重试"的产品决策，只做错误分类，不做自动重试；
 - 高德 QPS/配额：以控制台为准，错误码已映射；
 - 路线保存 / GPX UI、转向提示：本期非目标。
+
+## 18. P2 实现记录（2026-10-26）
+
+**新增**
+
+- `LocPilotKit/RouteSession.swift`：@MainActor 状态机
+  - `Phase`：editing / planning / planned / failed / playing / paused / finished；
+  - 编辑（加点 / 拖点 / 删点 / 清空，≤7）、模式切换、400ms 防抖规划、代次令牌丢弃过期结果；
+  - 播放控制（start / pause / resume / stop）与 SSE 进度同步；
+  - `planRevision` 供界面自动取景；`isEditingAllowed` 保证播放中禁止编辑。
+- `LocPilotApp/RoutePanel.swift`：底部路线面板（交通方式菜单、点数、规划状态、距离 / ETA / 速度、进度条、播放控制）+ 传送模式的「路线」入口胶囊。
+
+**修改**
+
+- `EngineClient.swift`：`StatusSnapshot` 增加 `route` / `playback`；新增 `RoutePlanResult` 与播放状态类型；新增 planRoute / start / pause / resume / stop；`EngineClient` 实现 `RouteServicing`；
+- `MapScreen.swift`：`MapPolyline` 画路线；起点 / 终点 / 途经点编号标记（可拖拽 / 右键删除）；点击地图按模式分流；规划完成自动取景；
+- `AppState.swift`：`mapMode`、`routeSession`、嵌套 ObservableObject 变化转发、路线动作转发与 `fitRoute()`；`LOCPILOT_MAP_MODE=route` 调试入口；
+- 后端 `session.route_summary(include_geometry=False)`：SSE 快照不再携带完整几何（规划响应仍带），避免每秒推几百个点。
+
+**验证**
+
+- Swift 测试：260 项全部通过（新增 7 项 RouteSession 用例：7 点上限、规划成功 / 失败重试、防抖合并、模式切换重规划、播放状态机、SSE 进度）；
+  - 新增 `testMainActorAsync`：主线程跑 RunLoop 等待，避免 `testAsync` 的信号量阻塞 MainActor 造成死等；
+- `swift build`（debug）与 `macos/build.sh`（release + ad-hoc 签名）均通过；
+- 后端 43 项 unittest 通过；确认快照 `route` 不含 `geometry`、`/api/route` 响应仍含几何；
+- 视觉验证受限：当前环境无屏幕录制权限（`screencapture` 报 "could not create image from display"），界面细节需在桌面手动确认。
+
+**P2 未做（按范围）**
+
+- 转向提示 / 语音、路线保存 / GPX UI、播放中编辑；
+- 真实设备联调（P3）。

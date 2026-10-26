@@ -3,17 +3,47 @@ import MapKit
 import SwiftUI
 
 /// 唯一主界面：Apple 地图铺满窗口，点击即改定位，右上控件簇，左下坐标读数。
+/// 路线模式下：点击加点、画路线、底部路线面板。
 struct MapScreen: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
         MapReader { proxy in
             Map(position: $state.camera, interactionModes: [.pan, .zoom]) {
-                if let marker = state.marker {
+                if state.mapMode == .teleport, let marker = state.marker {
                     // anchor: .bottom = 组件的底边中心（也就是针尖）钉在坐标上，
                     // 所有缩放/旋转都以它为轴，保证针尖不动（规格 §3 / §13）。
                     Annotation("", coordinate: CLLocationCoordinate2D(latitude: marker.lat, longitude: marker.lon), anchor: .bottom) {
                         MapLocationPin(animator: state.pin, label: marker.label)
+                    }
+                }
+
+                if state.mapMode == .route, let route = state.routeSession {
+                    if let plan = route.plan {
+                        MapPolyline(coordinates: plan.geometry.map {
+                            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+                        })
+                        .stroke(Color.accentColor.opacity(0.9),
+                                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    }
+                    ForEach(route.points) { point in
+                        let index = route.points.firstIndex(where: { $0.id == point.id }) ?? 0
+                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon), anchor: .center) {
+                            RoutePointMarker(
+                                index: index,
+                                count: route.pointCount,
+                                draggable: route.isEditingAllowed,
+                                onDrag: { location in
+                                    guard route.isEditingAllowed,
+                                          let coordinate = proxy.convert(location, from: .global) else { return }
+                                    state.routeMove(point.id, lat: coordinate.latitude, lon: coordinate.longitude)
+                                })
+                                .contextMenu {
+                                    Button("删除这个点", role: .destructive) {
+                                        state.routeRemove(point.id)
+                                    }
+                                }
+                        }
                     }
                 }
             }
@@ -25,9 +55,13 @@ struct MapScreen: View {
             }
             .onTapGesture { point in
                 // MapReader 把屏幕点换算成地理坐标：这是 SwiftUI Map 里取得点击位置的官方方式。
-                // 注意：这里不直接改定位 —— 先落针（带动效）并显示地址，落稳后才下发。
+                // 传送模式：先落针（带动效）并显示地址，落稳后才下发；
+                // 路线模式：直接追加一个途经点。
                 guard let coordinate = proxy.convert(point, from: .local) else { return }
-                Task { await state.selectLocation(lat: coordinate.latitude, lon: coordinate.longitude) }
+                Task { await state.handleMapTap(lat: coordinate.latitude, lon: coordinate.longitude) }
+            }
+            .onChange(of: state.routeSession?.planRevision) { _, _ in
+                state.fitRoute()
             }
             // 顶部：先铺悬停遮罩，再铺拖拽热区（遮罩 allowsHitTesting=false，不会挡拖拽）。
             // 都必须在控件簇之前叠加 —— 后叠加的控件簇层级更高，按钮照常可点。
@@ -51,11 +85,62 @@ struct MapScreen: View {
                     .padding(.leading, CoordinateReadout.leadingInset)
                     .padding(.bottom, CoordinateReadout.bottomInset)
             }
+            .overlay(alignment: .bottom) {
+                if state.mapMode == .route {
+                    RoutePanel()
+                        .padding(.bottom, 18)
+                } else {
+                    RouteEntryButton()
+                        .padding(.bottom, 18)
+                }
+            }
             .overlay(alignment: .top) {
                 if let message = state.lastMessage { MessagePill(text: message).padding(.top, 58) }
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+/// 路线途经点标记：起点/终点/中间点不同颜色，可拖动（高优先级手势，避免被地图平移抢走）。
+private struct RoutePointMarker: View {
+    let index: Int
+    let count: Int
+    let draggable: Bool
+    let onDrag: (CGPoint) -> Void
+
+    private var isStart: Bool { index == 0 }
+    private var isEnd: Bool { index == count - 1 && count > 1 }
+
+    private var title: String {
+        if isStart { return "起" }
+        if isEnd { return "终" }
+        return "\(index)"
+    }
+
+    private var fill: Color {
+        if isStart { return .green }
+        if isEnd { return .red }
+        return .accentColor
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(fill))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            .contentShape(Circle())
+            // 吞掉点击，避免穿透到地图又追加一个点
+            .onTapGesture { }
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                    .onChanged { value in
+                        if draggable { onDrag(value.location) }
+                    }
+            )
     }
 }
 

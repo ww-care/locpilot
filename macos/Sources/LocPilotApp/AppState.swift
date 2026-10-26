@@ -18,8 +18,17 @@ final class AppState: ObservableObject {
         var isOnline: Bool { self == .online }
     }
 
+    enum MapMode: Equatable {
+        case teleport
+        case route
+    }
+
     @Published private(set) var phase: BackendController.Phase = .idle
     @Published private(set) var connection: Connection = .offline
+    /// 地图模式：点击 = 传送（默认）或 点击 = 添加路线点。
+    @Published var mapMode: MapMode = .teleport
+    /// 路线模式状态机；后端就绪后创建。
+    @Published private(set) var routeSession: RouteSession?
     @Published private(set) var deviceName: String?
     /// 最近一次连接失败的原因。启动时只写这里，**不弹提示**；用户点开手机图标才看到。
     @Published private(set) var lastError: String?
@@ -84,11 +93,17 @@ final class AppState: ObservableObject {
     private var client: EngineClient?
     private var eventTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
+    private var routeCancellable: AnyCancellable?
+    private var followBeforeRoute = false
     private var selectionID = UUID()
     private var teleportTask: Task<LatLon, Error>?
 
     init(client: EngineClient? = nil) {
         self.client = client
+        // 调试/截图用：LOCPILOT_MAP_MODE=route 直接以路线模式启动。
+        if ProcessInfo.processInfo.environment["LOCPILOT_MAP_MODE"]?.lowercased() == "route" {
+            mapMode = .route
+        }
     }
 
     // MARK: - 生命周期
@@ -113,6 +128,13 @@ final class AppState: ObservableObject {
         backendReady = true
         let client = EngineClient(baseURL: backend.baseURL)
         self.client = client
+        let route = RouteSession(client: client)
+        // RouteSession 是嵌套的 ObservableObject：把它 changes 转成 AppState 的变化，
+        // 否则界面不会跟着路线状态刷新。
+        routeCancellable = route.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+        routeSession = route
         startEventStream(client)
         // 自动连接策略：默认 auto；验收/调试可用环境变量强制指定，
         // 避免脚本在插着真机时误连用户手机。
@@ -141,6 +163,7 @@ final class AppState: ObservableObject {
     }
 
     private func apply(_ snapshot: StatusSnapshot) {
+        routeSession?.apply(route: snapshot.route, playback: snapshot.playback)
         deviceName = snapshot.engine.device?.name
         position = snapshot.position
         connection = snapshot.engine.opened ? .online : (snapshot.error == nil ? .offline : .failed(snapshot.error ?? ""))
@@ -268,6 +291,97 @@ final class AppState: ObservableObject {
     func refresh() async {
         guard let client else { return }
         if let snapshot = try? await client.status() { apply(snapshot) }
+    }
+
+    // MARK: - 路线模式
+
+    func toggleMapMode() {
+        mapMode = mapMode == .teleport ? .route : .teleport
+        if mapMode == .route {
+            flash("路线模式：点击地图添加点（最多 7 个）")
+            if routeSession?.plan != nil { fitRoute() }
+        }
+    }
+
+    /// 地图点击统一入口：传送模式=改定位；路线模式=加点。
+    func handleMapTap(lat: Double, lon: Double) async {
+        if mapMode == .route {
+            guard let route = routeSession else { return }
+            if !route.addPoint(lat: lat, lon: lon) {
+                if route.pointCount >= route.maxPoints {
+                    flash("最多 7 个点")
+                } else {
+                    flash("回放中不能编辑路线")
+                }
+            }
+        } else {
+            await selectLocation(lat: lat, lon: lon)
+        }
+    }
+
+    func routeSetMode(_ mode: TravelMode) {
+        routeSession?.setMode(mode)
+    }
+
+    func routeClear() {
+        routeSession?.clear()
+    }
+
+    func routeRetry() {
+        guard let route = routeSession else { return }
+        Task { await route.planNow() }
+    }
+
+    func routeStart() {
+        guard let route = routeSession else { return }
+        followBeforeRoute = followsPosition
+        followsPosition = true
+        Task { await route.startPlayback() }
+    }
+
+    func routePause() {
+        guard let route = routeSession else { return }
+        Task { await route.pausePlayback() }
+    }
+
+    func routeResume() {
+        guard let route = routeSession else { return }
+        Task { await route.resumePlayback() }
+    }
+
+    func routeStop() {
+        guard let route = routeSession else { return }
+        followsPosition = followBeforeRoute
+        Task { await route.stopPlayback() }
+    }
+
+    func routeMove(_ id: UUID, lat: Double, lon: Double) {
+        routeSession?.movePoint(id, lat: lat, lon: lon)
+    }
+
+    func routeRemove(_ id: UUID) {
+        routeSession?.removePoint(id)
+    }
+
+    /// 把镜头取景到整条路线（规划成功后调用）。
+    func fitRoute() {
+        guard let route = routeSession, let plan = route.plan, !plan.geometry.isEmpty else { return }
+        var minLat = plan.geometry[0].lat
+        var maxLat = minLat
+        var minLon = plan.geometry[0].lon
+        var maxLon = minLon
+        for point in plan.geometry {
+            minLat = min(minLat, point.lat)
+            maxLat = max(maxLat, point.lat)
+            minLon = min(minLon, point.lon)
+            maxLon = max(maxLon, point.lon)
+        }
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.35, 0.004),
+            longitudeDelta: max((maxLon - minLon) * 1.35, 0.004))
+        didInitialCenter = true
+        moveCamera(MKCoordinateRegion(center: center, span: span), duration: 0.6)
     }
 
     // MARK: - 相机

@@ -77,6 +77,38 @@ func testAsync(_ name: String, timeout: TimeInterval = 20, _ body: @escaping () 
     if failed == before { print("  ✓ \(name)") }
 }
 
+/// 主 actor 上的异步测试：主线程跑 RunLoop 等待。
+///
+/// 为什么不能复用 testAsync：testAsync 用信号量阻塞主线程，而 MainActor 的执行器就是主线程，
+/// `MainActor.run` 永远排不上 → 死等。这里改成主线程 RunLoop 泵，让 MainActor 任务能推进。
+func testMainActorAsync(_ name: String, timeout: TimeInterval = 20,
+                        _ body: @escaping @MainActor () async throws -> Void) {
+    guard shouldRun(name) else { return }
+    current = name
+    let before = failed
+    let finished = Box<Bool>()
+    let failure = Box<Error>()
+    Task { @MainActor in
+        do { try await body() } catch { failure.set(error) }
+        finished.set(true)
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    while finished.get() != true, Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+    }
+    if finished.get() != true {
+        failed += 1
+        print("  ✗ [\(name)] 超时 >\(Int(timeout))s（主 actor 上疑似挂起）")
+        return
+    }
+    if let error = failure.get() {
+        failed += 1
+        print("  ✗ \(name) 抛出异常: \(error)")
+        return
+    }
+    if failed == before { print("  ✓ \(name)") }
+}
+
 /// 打印总结并以退出码表达结论。
 func finish() -> Never {
     print("")

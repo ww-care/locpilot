@@ -368,4 +368,8 @@ test("逆地理编码结果契约：只有 display_name 时用它兜底") {
 
 registerPinAnimatorTests()
 
+// MARK: - 路线模式状态机（用例见 RouteSessionTests.swift）
+
+registerRouteSessionTests()
+
 finish()

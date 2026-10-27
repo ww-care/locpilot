@@ -221,6 +221,7 @@ The script enforces an arm64 binary and no local absolute paths inside the bundl
 | UI says "connected" but the status never updates | Event-stream problem: make sure `EngineClient.events()` frames on bytes (`bytes.lines` swallows SSE empty lines) |
 | Playback pauses after a failed coordinate update | Check the backend log and `engine.error`; reconnect the device and continue via CLI / API |
 | `PermissionError: …/.pymobiledevice3` | Home directory is not writable (sandbox / CI / read-only HOME). The engine falls back to `<state dir>/pmd3-home`; you can also set `LOCPILOT_PMD3_HOME=/writable/path` explicitly |
+| Blank / partially loaded map when a VPN is on | Apple Maps tiles (China data is provided by AMap) are being proxied abroad. Add direct rules in your VPN: `DOMAIN-SUFFIX,ls.apple.com,DIRECT`, `DOMAIN-SUFFIX,apple-mapkit.com,DIRECT`, `DOMAIN-SUFFIX,aaplimg.com,DIRECT`, and use rule/config mode instead of global proxy; on Shadowrocket add them under "Config → Rules" |
 
 ## 9. Security
 

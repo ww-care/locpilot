@@ -237,6 +237,7 @@ bash macos/dist.sh
 | 界面显示已连接但状态不刷新 | 事件流问题：确认 `EngineClient.events()` 按字节分帧（`bytes.lines` 会吞掉 SSE 空行） |
 | 坐标下发失败后回放暂停 | 查后端日志与 `engine.error`；重连设备后用 CLI / API 继续 |
 | `PermissionError: …/.pymobiledevice3` | 家目录不可写（沙箱 / CI / 只读 HOME）。引擎会自动退到 `<状态目录>/pmd3-home`，也可显式指定 `LOCPILOT_PMD3_HOME=/可写路径` |
+| 打开 VPN 后地图空白 / 只加载一小块 | Apple 地图瓦片（中国区数据由高德提供）被 VPN 代理到境外。在 VPN 规则里把 Apple 地图域名设为直连：`DOMAIN-SUFFIX,ls.apple.com,DIRECT`、`DOMAIN-SUFFIX,apple-mapkit.com,DIRECT`、`DOMAIN-SUFFIX,aaplimg.com,DIRECT`，并把全局路由改为「规则 / 配置」；Shadowrocket 在「配置 → 规则」里添加 |
 
 ## 9. 安全
 

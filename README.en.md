@@ -205,9 +205,10 @@ The script enforces an arm64 binary and no local absolute paths inside the bundl
 * **The IP address does not change**: services that rely on IP/Wi-Fi positioning still see the real region.
 * **Detectable**: CoreLocation exposes `isSimulatedBySoftware`, so games and risk-control systems may recognise simulated locations; do not use this to break terms of service or to cheat.
 * **On iOS 17+ the location lives with the connection**: dropping the DVT connection restores the real location, so the app / service must stay running.
+* **Wi-Fi connection supported**: pair the iPhone over USB once and enable "Sync with this iPhone over Wi-Fi" in Finder; afterwards, the app can connect wirelessly as long as the phone and Mac are on the same LAN. First-time pairing and Developer Mode still require USB.
 * **On iOS ≤16 the location is device-side state**: it survives process exit and only `clear` (or a reboot) restores the real location.
 * Developer Mode and a Developer Disk Image are required; locked or untrusted devices cannot work.
-* The native map is provided by MapKit and needs network access (Apple Maps services). In China the data source is AMap, but coordinates stay WGS-84 — **no GCJ-02 correction is needed**.
+* The native map is provided by MapKit and needs network access (Apple Maps services). **Note: macOS MapKit returns/uses GCJ-02 coordinates in mainland China**, while the device and backend use WGS-84; the app converts GCJ→WGS on tap/drag and WGS→GCJ when drawing, and leaves overseas/HK/Macau/Taiwan untouched (`macos/Sources/LocPilotKit/ChinaCoordinate.swift`).
 
 ## 8. Troubleshooting
 

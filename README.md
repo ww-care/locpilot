@@ -220,6 +220,8 @@ bash macos/dist.sh
 * **IP 不改变**：依赖 IP/Wi-Fi 定位的服务仍能看到真实地区。
 * **可被检测**：CoreLocation 暴露 `isSimulatedBySoftware`，游戏与风控可能识别模拟定位；请勿用于破坏服务条款或作弊场景。
 * **iOS 17+ 的定位随连接存活**：DVT 连接断开即恢复真实定位，所以必须保持 App / 服务运行。
+* **支持 Wi-Fi 无线连接**：iPhone 先用 USB 配对、在 Finder 中勾选「通过 Wi-Fi 同步」后，
+  只要手机与 Mac 在同一局域网即可无线连接（无需数据线）；首次配对与开启开发者模式仍需 USB。
 * **iOS ≤16 的定位是设备侧状态**：进程退出后仍保持，需 `clear`（或重启）才恢复。
 * 需要开发者模式与 Developer Disk Image；锁屏 / 未信任设备无法工作。
 * 原生版地图由 MapKit 提供，需要联网（Apple 地图服务）。**注意：macOS MapKit 在中国大陆返回/使用 GCJ-02 坐标**，而设备与后端统一用 WGS-84；App 在点击/拖动时 GCJ→WGS、绘制时 WGS→GCJ，境外与港澳台不转换（`macos/Sources/LocPilotKit/ChinaCoordinate.swift`）。

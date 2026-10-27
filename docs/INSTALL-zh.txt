@@ -1,4 +1,4 @@
-LocPilot v1.1.0 — iOS 虚拟定位 / 路线回放工具（Apple Silicon 原生）
+LocPilot v1.1.1 — iOS 虚拟定位 / 路线回放工具（Apple Silicon 原生）
 ====================================================================
 
 【这是什么】
@@ -12,7 +12,7 @@ LocPilot v1.1.0 — iOS 虚拟定位 / 路线回放工具（Apple Silicon 原生
 - iPhone 需开启开发者模式、用 USB 连接并信任本机（iOS 17+ 默认走 pymobiledevice3）
 
 【安装】
-1. 解压 LocPilot-1.1.0-arm64.zip，得到 LocPilot.app
+1. 解压 LocPilot-1.1.1-arm64.zip，得到 LocPilot.app
 2. 把 LocPilot.app 拖进「应用程序」文件夹
 
 【首次打开】
@@ -39,7 +39,7 @@ App 首次运行只会拉起内置后端；要驱动真机，需要 pymobiledevi
 5. 暂停 / 继续 / 停止；停止后设备停在原地，点「继续」从这个位置接着走
 
 【校验】
-shasum -a 256 LocPilot-1.1.0-arm64.zip
+shasum -a 256 LocPilot-1.1.1-arm64.zip
 结果应与 Release 页里的 SHA-256 一致。
 
 【许可】

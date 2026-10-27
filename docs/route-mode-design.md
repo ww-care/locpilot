@@ -457,4 +457,6 @@ locpilot/api.py   增量：/api/route 支持 mode/provider/jitter/seed
 - 已知点校验：WGS(天安门)→GCJ 与标准算法一致；高德 GCJ(静安寺)→WGS 反解误差 < 1 m；
   东方明珠 WGS→GCJ 落在高德坐标 20 m 内；
 - 真机：WGS 直发时手机位置准确；闲置刷新后 `set` 立即生效（外滩→静安寺→人民广场均能跳转）；
-- release 构建 + 签名安装到 `/Applications`，最终以 App 内点击「东方明珠」与路线回放做目视验收。
+- release 构建 + 签名安装到 `/Applications`；
+- ✅ **2026-10-27 真机目视验收通过**：用户确认「定位和 App 一致了」——点击落针、设备位置、
+  路线绿点三者坐标统一，P2.1 的 500 m 偏移与通道失效问题均关闭。

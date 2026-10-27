@@ -58,13 +58,43 @@ private struct StatusButton: View {
                 .foregroundStyle(state.statusColor)
                 .shadow(color: state.statusColor.opacity(0.9), radius: 7)
                 .frame(width: StatusButton.diameter, height: StatusButton.diameter)
+                .overlay(alignment: .bottomTrailing) {
+                    if state.connection.isOnline, let link = state.link {
+                        LinkBadge(link: link)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .modifier(GlassChrome(shape: Circle()))
         .popover(isPresented: $state.devicePopoverShown, arrowEdge: .trailing) {
             DevicePopover()
         }
-        .help(state.connection.isOnline ? (state.deviceName ?? "已连接") : "设备未连接")
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        guard state.connection.isOnline else { return "设备未连接" }
+        let name = state.deviceName ?? "已连接"
+        guard let link = state.link else { return name }
+        return "\(name) · \(link.label) 连接"
+    }
+}
+
+/// 手机图标右下角的小角标：Wi-Fi（无线）或 USB（数据线）。
+private struct LinkBadge: View {
+    let link: DeviceLink
+
+    var body: some View {
+        Image(systemName: link.symbolName)
+            .font(.system(size: 8.5, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 16, height: 16)
+            .background(Circle().fill(link == .wifi ? Color.accentColor : Color.black.opacity(0.62)))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.22), radius: 2, y: 1)
+            .offset(x: 3, y: 3)
+            .help("\(link.label) 连接")
+            .accessibilityLabel("\(link.label) 连接")
     }
 }
 
@@ -110,7 +140,10 @@ private struct DevicePopover: View {
 
     private var title: String {
         switch state.connection {
-        case .online: return state.deviceName ?? "已连接"
+        case .online:
+            let name = state.deviceName ?? "已连接"
+            if let link = state.link { return "\(name) · \(link.label)" }
+            return name
         case .connecting: return "正在连接…"
         default: return "设备未连接"
         }

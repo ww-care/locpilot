@@ -30,6 +30,8 @@ final class AppState: ObservableObject {
     /// 路线模式状态机；后端就绪后创建。
     @Published private(set) var routeSession: RouteSession?
     @Published private(set) var deviceName: String?
+    /// 当前连接方式（USB / Wi-Fi）；未连接或后端未提供时为 nil。
+    @Published private(set) var link: DeviceLink?
     /// 最近一次连接失败的原因。启动时只写这里，**不弹提示**；用户点开手机图标才看到。
     @Published private(set) var lastError: String?
     /// 手机图标的小弹框显隐（点图标展开）
@@ -165,6 +167,7 @@ final class AppState: ObservableObject {
     private func apply(_ snapshot: StatusSnapshot) {
         routeSession?.apply(route: snapshot.route, playback: snapshot.playback)
         deviceName = snapshot.engine.device?.name
+        link = snapshot.engine.device?.link
         position = snapshot.position
         connection = snapshot.engine.opened ? .online : (snapshot.error == nil ? .offline : .failed(snapshot.error ?? ""))
         // 只有传送模式才维护落针与反查地名；路线模式有独立的绿点，
@@ -210,9 +213,11 @@ final class AppState: ObservableObject {
         invalidateSelection()
         _ = try? await teleportTask?.value
         connection = .connecting
+        link = nil
         do {
             let result = try await client.connect(engine: engine)
             deviceName = result.device?.name
+            link = result.device?.link
             connection = .online
             lastError = nil
             log("connect(engine: \(engine)) -> \(result.engine) / \(result.device?.name ?? "-")")
@@ -238,6 +243,7 @@ final class AppState: ObservableObject {
             position = nil
             marker = nil
             deviceName = nil
+            link = nil
         } catch {
             lastError = error.localizedDescription
             log("断开失败: \(error.localizedDescription)")

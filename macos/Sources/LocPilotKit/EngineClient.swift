@@ -11,6 +11,29 @@ public struct LatLon: Codable, Sendable, Equatable {
     }
 }
 
+/// 设备连接方式：USB 数据线 / Wi-Fi 无线。
+public enum DeviceLink: String, Sendable, Equatable {
+    case usb
+    case wifi
+
+    public init?(connection: String?) {
+        switch connection?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "usb":
+            self = .usb
+        case "network", "wifi", "wi-fi":
+            self = .wifi
+        default:
+            return nil
+        }
+    }
+
+    /// 界面上显示的名称。
+    public var label: String { self == .wifi ? "Wi-Fi" : "USB" }
+
+    /// 手机图标右下角的角标符号。
+    public var symbolName: String { self == .wifi ? "wifi" : "cable.connector" }
+}
+
 /// 后端状态快照。字段与 locpilot/core/session.py 的 snapshot() 一一对应，
 /// 只声明原生界面真正用到的部分，其余忽略（后端新增字段不会破坏解析）。
 public struct StatusSnapshot: Decodable, Sendable {
@@ -30,6 +53,9 @@ public struct StatusSnapshot: Decodable, Sendable {
             case iosVersion = "ios_version"
             case productType = "product_type"
         }
+
+        /// 当前连接方式（后端 device.connection：usb / network）。
+        public var link: DeviceLink? { DeviceLink(connection: connection) }
     }
     public struct Engine: Decodable, Sendable {
         public let name: String?

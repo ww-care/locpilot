@@ -364,6 +364,31 @@ test("逆地理编码结果契约：只有 display_name 时用它兜底") {
     expectEqual(envelope.result?.shortLabel, "某地, 某省", "回落完整地址")
 }
 
+// MARK: - 设备连接方式（USB / Wi-Fi）
+
+test("连接方式：device.connection 解析为 USB / Wi-Fi") {
+    let network = try JSONDecoder().decode(
+        StatusSnapshot.Device.self,
+        from: Data(#"{"name":"iPhone","udid":"u","connection":"network"}"#.utf8))
+    expectEqual(network.link, .wifi, "network 应解析为 Wi-Fi")
+    expectEqual(network.link?.label, "Wi-Fi", "显示名")
+    expectEqual(network.link?.symbolName, "wifi", "角标符号")
+
+    let usb = try JSONDecoder().decode(
+        StatusSnapshot.Device.self,
+        from: Data(#"{"name":"iPhone","udid":"u","connection":"usb"}"#.utf8))
+    expectEqual(usb.link, .usb, "usb 应解析为 USB")
+    expectEqual(usb.link?.label, "USB", "显示名")
+    expectEqual(usb.link?.symbolName, "cable.connector", "角标符号")
+}
+
+test("连接方式：缺失或未知取值不显示角标") {
+    expect(DeviceLink(connection: nil) == nil, "nil 应无连接方式")
+    expect(DeviceLink(connection: "") == nil, "空串应无连接方式")
+    expect(DeviceLink(connection: "unknown") == nil, "未知值应无连接方式")
+    expect(DeviceLink(connection: "Wi-Fi") == .wifi, "大小写/写法兼容")
+}
+
 // MARK: - 地图大头针定位动画规格符合性（用例见 PinAnimatorTests.swift）
 
 registerPinAnimatorTests()
